@@ -23,13 +23,10 @@ public sealed class AppPaths
 
     public static AppPaths CreateDefault()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var root = string.IsNullOrWhiteSpace(appData)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".cxsql"
-            )
-            : Path.Combine(appData, "cxsql");
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".cxsql"
+        );
 
         return new AppPaths(root);
     }
