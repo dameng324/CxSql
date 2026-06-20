@@ -1,6 +1,8 @@
 using CxSql.Models;
 using CxSql.UI.Dialogs;
+using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
+using Npgsql;
 using TUnit.Core;
 
 namespace CxSql.Tests;
@@ -65,6 +67,53 @@ public sealed class ConnectionInputMapperTests
         {
             throw new InvalidOperationException(
                 "Expected PostgreSQL connection string to remain unchanged."
+            );
+        }
+    }
+
+    [Test]
+    public void PostgreSqlServerFieldsBuildConnectionString()
+    {
+        var connectionString = ConnectionInputMapper.ToServerConnectionString(
+            DatabaseType.PostgreSql,
+            new ServerConnectionFields("127.0.0.1", 5432, "appdb", "appuser", "secret")
+        );
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+
+        if (
+            builder.Host != "127.0.0.1"
+            || builder.Port != 5432
+            || builder.Database != "appdb"
+            || builder.Username != "appuser"
+            || builder.Password != "secret"
+        )
+        {
+            throw new InvalidOperationException(
+                $"Unexpected PostgreSQL connection string: {connectionString}."
+            );
+        }
+    }
+
+    [Test]
+    public void SqlServerServerFieldsBuildConnectionString()
+    {
+        var connectionString = ConnectionInputMapper.ToServerConnectionString(
+            DatabaseType.SqlServer,
+            new ServerConnectionFields("10.0.0.5", 1444, "appdb", "sa", "secret")
+        );
+        var builder = new SqlConnectionStringBuilder(connectionString);
+
+        if (
+            builder.DataSource != "10.0.0.5,1444"
+            || builder.InitialCatalog != "appdb"
+            || builder.UserID != "sa"
+            || builder.Password != "secret"
+            || !builder.Encrypt
+            || !builder.TrustServerCertificate
+        )
+        {
+            throw new InvalidOperationException(
+                $"Unexpected SQL Server connection string: {connectionString}."
             );
         }
     }

@@ -1,0 +1,204 @@
+name: Publish
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: NuGet package version, for example 0.1.0-preview.1
+        required: true
+        type: string
+      publish_to_nuget:
+        description: Push collected packages to nuget.org
+        required: true
+        default: false
+        type: boolean
+      nuget_user:
+        description: NuGet.org username. Release publishing uses the NUGET_USER repository variable.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: src/cxsql/cxsql.csproj
+  PACKAGE_OUTPUT: artifacts/package/release
+  NUGET_USER: BigDream
+
+jobs:
+  build-platform-specific:
+    name: Build AOT package (${{ matrix.rid }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+          - os: windows-2025
+            rid: win-x64
+          - os: windows-11-arm
+            rid: win-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-15
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: ./global.json
+
+      - name: Compute package version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = "${{ github.event.release.tag_name }}"
+          }
+          $version = $version.TrimStart("v")
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build AOT package for ${{ matrix.rid }}
+        run: >
+          dotnet pack ${{ env.PROJECT }}
+          --configuration Release
+          --output ${{ env.PACKAGE_OUTPUT }}
+          -p:Version=${{ steps.version.outputs.value }}
+          -p:ToolType=aot
+          --use-current-runtime
+
+      - name: Upload platform-specific package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aot-package-${{ matrix.rid }}
+          path: ${{ env.PACKAGE_OUTPUT }}/*.nupkg
+          retention-days: 30
+          if-no-files-found: error
+
+  build-agnostic:
+    name: Build agnostic AOT package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: ./global.json
+
+      - name: Compute package version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = "${{ github.event.release.tag_name }}"
+          }
+          $version = $version.TrimStart("v")
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build agnostic AOT package
+        run: >
+          dotnet pack ${{ env.PROJECT }}
+          --configuration Release
+          --output ${{ env.PACKAGE_OUTPUT }}
+          -p:Version=${{ steps.version.outputs.value }}
+          -p:ToolType=aot
+
+      - name: Upload agnostic package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aot-package-agnostic
+          path: ${{ env.PACKAGE_OUTPUT }}/*.nupkg
+          retention-days: 30
+          if-no-files-found: error
+
+  collect-all-packages:
+    name: Collect packages
+    needs:
+      - build-platform-specific
+      - build-agnostic
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: collected-packages
+
+      - name: List collected packages
+        run: |
+          echo "All collected packages:"
+          find collected-packages -name "*.nupkg" -type f | sort
+          echo ""
+          echo "Package count: $(find collected-packages -name "*.nupkg" -type f | wc -l)"
+
+      - name: Upload all packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-aot-packages
+          path: collected-packages/**/*.nupkg
+          retention-days: 90
+          if-no-files-found: error
+
+  publish-nuget:
+    name: Publish to nuget.org
+    needs: collect-all-packages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || inputs.publish_to_nuget
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NUGET_USER: ${{ inputs.nuget_user || vars.NUGET_USER }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download collected packages
+        uses: actions/download-artifact@v4
+        with:
+          name: all-aot-packages
+          path: collected-packages
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: ./global.json
+
+      - name: Validate OIDC publish configuration
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_USER)) {
+            throw "Set the NUGET_USER repository variable, or provide the nuget_user workflow input."
+          }
+
+      - name: NuGet Login
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ env.NUGET_USER }}
+
+      - name: Push packages
+        shell: pwsh
+        run: |
+          Get-ChildItem collected-packages -Recurse -Filter *.nupkg | ForEach-Object {
+            dotnet nuget push $_.FullName `
+              --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" `
+              --source https://www.nuget.org/api/v2/package `
+              --skip-duplicate
+          }

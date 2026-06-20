@@ -6,6 +6,23 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cxsql</ToolCommandName>
+    <PackageId>cxsql</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>CxSql contributors</Authors>
+    <Description>Mouse-first cross-platform terminal SQL client for SQLite, PostgreSQL, and SQL Server.</Description>
+    <PackageTags>sql;database;tui;sqlite;postgresql;sqlserver</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <GenerateNuspecDependsOn>CheckToolTypeIsValid;$(GenerateNuspecDependsOn)</GenerateNuspecDependsOn>
+    <_ToolRIDs>linux-x64;linux-arm64;win-x64;win-arm64;osx-x64;osx-arm64</_ToolRIDs>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(ToolType)' == 'aot'">
+    <RuntimeIdentifiers>$(_ToolRIDs)</RuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,4 +32,15 @@
     <PackageReference Include="Npgsql" />
     <PackageReference Include="SharpConsoleUI" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <Target Name="CheckToolTypeIsValid">
+    <Error
+      Condition="'$(ToolType)' != '' and '$(ToolType)' != 'aot'"
+      Text="Invalid ToolType value: $(ToolType). Valid values are empty or aot."
+    />
+  </Target>
 </Project>

@@ -19,9 +19,16 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
 {
     private readonly Func<NewConnectionRequest, Task<ConnectionTestResult>> testConnectionAsync;
     private DatabaseType selectedType = DatabaseType.Sqlite;
+    private NewConnectionInputMode selectedMode = NewConnectionInputMode.ConnectionString;
     private PromptControl? namePrompt;
     private PromptControl? connectionStringPrompt;
+    private PromptControl? hostPrompt;
+    private PromptControl? portPrompt;
+    private PromptControl? databasePrompt;
+    private PromptControl? usernamePrompt;
+    private PromptControl? passwordPrompt;
     private TabControl? typeTabs;
+    private TabControl? modeTabs;
     private MarkupControl? connectionHelp;
     private MarkupControl? testStatus;
     private bool testing;
@@ -57,7 +64,7 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
 
     protected override int GetHeight()
     {
-        return 19;
+        return 25;
     }
 
     protected override NewConnectionRequest? GetDefaultResult()
@@ -108,8 +115,62 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
 
         namePrompt = Controls.Prompt("Name: ").WithInputWidth(58).WithMargin(1, 1, 1, 0).Build();
 
+        modeTabs = new TabControlBuilder()
+            .WithHeaderStyle(TabHeaderStyle.Classic)
+            .WithActiveTab(0)
+            .WithHeight(4)
+            .WithMargin(1, 0, 1, 0)
+            .AddTab(
+                "Server",
+                Controls
+                    .Markup(
+                        "[grey70]Build a connection string from IP/host, port, username and password.[/]"
+                    )
+                    .WithMargin(1, 0, 1, 0)
+                    .Build()
+            )
+            .AddTab(
+                "Connection String",
+                Controls
+                    .Markup("[grey70]Paste the provider connection string directly.[/]")
+                    .WithMargin(1, 0, 1, 0)
+                    .Build()
+            )
+            .Build();
+        modeTabs.ActiveFocusedBackgroundColor = new Color(28, 76, 130);
+        modeTabs.ActiveUnfocusedBackgroundColor = new Color(28, 76, 130);
+        modeTabs.ActiveFocusedForegroundColor = Color.White;
+        modeTabs.ActiveUnfocusedForegroundColor = Color.White;
+        modeTabs.InactiveFocusedForegroundColor = Color.Grey70;
+        modeTabs.InactiveUnfocusedForegroundColor = Color.Grey50;
+        modeTabs.TabChanged += (_, _) => SetModeFromTab();
+
         connectionStringPrompt = Controls
             .Prompt(ConnectionInputMapper.GetInputLabel(selectedType))
+            .WithInputWidth(58)
+            .WithMargin(1, 0, 1, 0)
+            .Build();
+
+        hostPrompt = Controls.Prompt("IP/Host: ").WithInputWidth(58).WithMargin(1, 0, 1, 0).Build();
+        portPrompt = Controls
+            .Prompt("Port: ")
+            .WithInput(ConnectionInputMapper.GetDefaultPort(DatabaseType.PostgreSql).ToString())
+            .WithInputWidth(12)
+            .WithMargin(1, 0, 1, 0)
+            .Build();
+        databasePrompt = Controls
+            .Prompt("Database (optional): ")
+            .WithInputWidth(46)
+            .WithMargin(1, 0, 1, 0)
+            .Build();
+        usernamePrompt = Controls
+            .Prompt("Username: ")
+            .WithInputWidth(58)
+            .WithMargin(1, 0, 1, 0)
+            .Build();
+        passwordPrompt = Controls
+            .Prompt("Password: ")
+            .WithMaskCharacter('*')
             .WithInputWidth(58)
             .WithMargin(1, 0, 1, 0)
             .Build();
@@ -151,7 +212,13 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
 
         Modal!.AddControl(typeTabs);
         Modal.AddControl(namePrompt);
+        Modal.AddControl(modeTabs);
         Modal.AddControl(connectionStringPrompt);
+        Modal.AddControl(hostPrompt);
+        Modal.AddControl(portPrompt);
+        Modal.AddControl(databasePrompt);
+        Modal.AddControl(usernamePrompt);
+        Modal.AddControl(passwordPrompt);
         Modal.AddControl(connectionHelp);
         Modal.AddControl(testStatus);
         Modal.AddControl(buttons);
@@ -160,13 +227,14 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
                 .Markup()
                 .AddLine("[grey70]Test/Create/Cancel are buttons. Esc closes the dialog.[/]")
                 .AddLine(
-                    "[grey50]For SQLite, enter a database file path; cxsql builds the connection string.[/]"
+                    "[grey50]SQLite uses a file path. PostgreSQL and SQL Server can use Server fields or a direct connection string.[/]"
                 )
                 .StickyBottom()
                 .WithMargin(1, 0, 1, 0)
                 .Build()
         );
 
+        UpdateInputControls(resetValues: false);
         namePrompt.RequestFocus();
     }
 
@@ -178,20 +246,129 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
             2 => DatabaseType.SqlServer,
             _ => DatabaseType.Sqlite,
         };
+        selectedMode =
+            selectedType == DatabaseType.Sqlite
+                ? NewConnectionInputMode.ConnectionString
+                : NewConnectionInputMode.ServerFields;
+        if (modeTabs is not null)
+        {
+            modeTabs.ActiveTabIndex = 0;
+        }
+
+        UpdateInputControls(resetValues: true);
+        GetPrimaryInput()?.RequestFocus();
+    }
+
+    private void SetModeFromTab()
+    {
+        if (selectedType == DatabaseType.Sqlite)
+        {
+            selectedMode = NewConnectionInputMode.ConnectionString;
+        }
+        else
+        {
+            selectedMode =
+                modeTabs?.ActiveTabIndex == 1
+                    ? NewConnectionInputMode.ConnectionString
+                    : NewConnectionInputMode.ServerFields;
+        }
+
+        UpdateInputControls(resetValues: false);
+        GetPrimaryInput()?.RequestFocus();
+    }
+
+    private void UpdateInputControls(bool resetValues)
+    {
+        var isSqlite = selectedType == DatabaseType.Sqlite;
+        var isServerFields = !isSqlite && selectedMode == NewConnectionInputMode.ServerFields;
+        var isConnectionString =
+            isSqlite || selectedMode == NewConnectionInputMode.ConnectionString;
+
         if (connectionStringPrompt is not null)
         {
             connectionStringPrompt.Prompt = ConnectionInputMapper.GetInputLabel(selectedType);
-            connectionStringPrompt.InputWidth = selectedType == DatabaseType.Sqlite ? 58 : 48;
+            connectionStringPrompt.InputWidth = isSqlite ? 58 : 48;
+            connectionStringPrompt.Visible = isConnectionString;
+            if (resetValues)
+            {
+                connectionStringPrompt.SetInput(string.Empty);
+            }
         }
 
-        connectionStringPrompt?.SetInput(string.Empty);
-        connectionHelp?.SetContent([
-            $"[grey50]{Escape(ConnectionInputMapper.GetHelpText(selectedType))}[/]",
-        ]);
+        if (modeTabs is not null)
+        {
+            modeTabs.Visible = !isSqlite;
+        }
+
+        SetServerFieldVisibility(isServerFields);
+        if (resetValues)
+        {
+            hostPrompt?.SetInput(string.Empty);
+            portPrompt?.SetInput(ConnectionInputMapper.GetDefaultPort(selectedType).ToString());
+            databasePrompt?.SetInput(string.Empty);
+            usernamePrompt?.SetInput(string.Empty);
+            passwordPrompt?.SetInput(string.Empty);
+        }
+
+        connectionHelp?.SetContent([$"[grey50]{Escape(BuildHelpText())}[/]"]);
         testStatus?.SetContent([
             "[grey50]Test validates the current connection settings before Create.[/]",
         ]);
-        connectionStringPrompt?.RequestFocus();
+    }
+
+    private void SetServerFieldVisibility(bool visible)
+    {
+        if (hostPrompt is not null)
+        {
+            hostPrompt.Visible = visible;
+        }
+
+        if (portPrompt is not null)
+        {
+            portPrompt.Visible = visible;
+        }
+
+        if (databasePrompt is not null)
+        {
+            databasePrompt.Visible = visible;
+        }
+
+        if (usernamePrompt is not null)
+        {
+            usernamePrompt.Visible = visible;
+        }
+
+        if (passwordPrompt is not null)
+        {
+            passwordPrompt.Visible = visible;
+        }
+    }
+
+    private PromptControl? GetPrimaryInput()
+    {
+        return
+            selectedMode == NewConnectionInputMode.ServerFields
+            && selectedType != DatabaseType.Sqlite
+            ? hostPrompt
+            : connectionStringPrompt;
+    }
+
+    private string BuildHelpText()
+    {
+        if (selectedType == DatabaseType.Sqlite)
+        {
+            return ConnectionInputMapper.GetHelpText(selectedType);
+        }
+
+        if (selectedMode == NewConnectionInputMode.ConnectionString)
+        {
+            return ConnectionInputMapper.GetHelpText(selectedType);
+        }
+
+        var port = ConnectionInputMapper.GetDefaultPort(selectedType);
+        return selectedType == DatabaseType.SqlServer
+            ? $"Server mode builds a SQL Server connection string. Default port is {port}; TrustServerCertificate=True is applied for terminal setup."
+            : $"Server mode builds a PostgreSQL connection string. Default port is {port}.";
     }
 
     private void Submit()
@@ -235,11 +412,26 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
     private bool TryBuildRequest(out NewConnectionRequest request)
     {
         var name = namePrompt?.Input.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            testStatus?.SetContent(["[yellow]Name is required before testing or creating.[/]"]);
+            request = new NewConnectionRequest(string.Empty, selectedType, string.Empty);
+            return false;
+        }
+
+        if (
+            selectedMode == NewConnectionInputMode.ServerFields
+            && selectedType != DatabaseType.Sqlite
+        )
+        {
+            return TryBuildServerRequest(name, out request);
+        }
+
         var rawConnection = connectionStringPrompt?.Input.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(rawConnection))
+        if (string.IsNullOrWhiteSpace(rawConnection))
         {
             testStatus?.SetContent([
-                "[yellow]Name and connection value are required before testing or creating.[/]",
+                "[yellow]Connection value is required before testing or creating.[/]",
             ]);
             request = new NewConnectionRequest(string.Empty, selectedType, string.Empty);
             return false;
@@ -249,6 +441,44 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
             name,
             selectedType,
             ConnectionInputMapper.ToConnectionString(selectedType, rawConnection)
+        );
+        return true;
+    }
+
+    private bool TryBuildServerRequest(string name, out NewConnectionRequest request)
+    {
+        var host = hostPrompt?.Input.Trim() ?? string.Empty;
+        var portText = portPrompt?.Input.Trim() ?? string.Empty;
+        var database = databasePrompt?.Input.Trim();
+        var username = usernamePrompt?.Input.Trim() ?? string.Empty;
+        var password = passwordPrompt?.Input ?? string.Empty;
+        if (
+            string.IsNullOrWhiteSpace(host)
+            || string.IsNullOrWhiteSpace(username)
+            || string.IsNullOrWhiteSpace(password)
+        )
+        {
+            testStatus?.SetContent([
+                "[yellow]IP/Host, username and password are required in Server mode.[/]",
+            ]);
+            request = new NewConnectionRequest(string.Empty, selectedType, string.Empty);
+            return false;
+        }
+
+        if (!int.TryParse(portText, out var port) || port <= 0 || port > 65535)
+        {
+            testStatus?.SetContent(["[yellow]Port must be a number between 1 and 65535.[/]"]);
+            request = new NewConnectionRequest(string.Empty, selectedType, string.Empty);
+            return false;
+        }
+
+        request = new NewConnectionRequest(
+            name,
+            selectedType,
+            ConnectionInputMapper.ToServerConnectionString(
+                selectedType,
+                new ServerConnectionFields(host, port, database, username, password)
+            )
         );
         return true;
     }
@@ -290,5 +520,11 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         Test,
         Primary,
         Cancel,
+    }
+
+    private enum NewConnectionInputMode
+    {
+        ServerFields,
+        ConnectionString,
     }
 }
