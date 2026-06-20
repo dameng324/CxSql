@@ -15,10 +15,6 @@ on:
         required: true
         default: false
         type: boolean
-      nuget_user:
-        description: NuGet.org username. Release publishing uses the NUGET_USER repository variable.
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -26,7 +22,6 @@ permissions:
 env:
   PROJECT: src/cxsql/cxsql.csproj
   PACKAGE_OUTPUT: artifacts/package/release
-  NUGET_USER: BigDream
 
 jobs:
   build-platform-specific:
@@ -161,9 +156,7 @@ jobs:
     if: github.event_name == 'release' || inputs.publish_to_nuget
     permissions:
       contents: read
-      id-token: write
-    env:
-      NUGET_USER: ${{ inputs.nuget_user || vars.NUGET_USER || env.NUGET_USER }}
+      id-token: write    
 
     steps:
       - name: Checkout
@@ -180,18 +173,11 @@ jobs:
         with:
           global-json-file: ./global.json
 
-      - name: Validate OIDC publish configuration
-        shell: pwsh
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:NUGET_USER)) {
-            throw "Set the NUGET_USER repository variable, or provide the nuget_user workflow input."
-          }
-
       - name: NuGet Login
         id: login
         uses: NuGet/login@v1
         with:
-          user: ${{ env.NUGET_USER }}
+          user: BigDream
 
       - name: Push packages
         shell: pwsh
