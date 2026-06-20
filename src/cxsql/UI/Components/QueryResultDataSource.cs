@@ -105,6 +105,42 @@ public sealed class QueryResultDataSource : ITableDataSource
         return row >= 0 && row < rows.Count ? rows[row] : null;
     }
 
+    public string GetPlainCellValue(int row, int col)
+    {
+        if (row < 0 || row >= rows.Count || col < 0 || col >= ColumnCount)
+        {
+            return string.Empty;
+        }
+
+        var values = rows[row].Values;
+        return col < values.Count ? values[col] ?? string.Empty : string.Empty;
+    }
+
+    public IReadOnlyList<string> GetPlainRowValues(int row)
+    {
+        if (row < 0 || row >= rows.Count)
+        {
+            return [];
+        }
+
+        return rows[row].Values.Select(value => value ?? string.Empty).ToList();
+    }
+
+    public string ToTabDelimitedText()
+    {
+        if (queryResult is null)
+        {
+            return string.Empty;
+        }
+
+        var lines = new List<string>
+        {
+            string.Join('\t', queryResult.Columns.Select(column => column.Name)),
+        };
+        lines.AddRange(rows.Select(row => string.Join('\t', row.Values)));
+        return string.Join(Environment.NewLine, lines);
+    }
+
     public bool CanSort(int col)
     {
         return queryResult is not null && col >= 0 && col < queryResult.Columns.Count;

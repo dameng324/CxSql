@@ -13,7 +13,7 @@ public sealed class ShortcutPolicyTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        var expected = new[] { "Ctrl+N", "Ctrl+S", "Esc", "F5" };
+        var expected = new[] { "Ctrl+Q", "Ctrl+S", "Esc", "F5" };
         if (!shortcutTexts.SequenceEqual(expected))
         {
             throw new InvalidOperationException(
@@ -31,6 +31,20 @@ public sealed class ShortcutPolicyTests
         if (ShortcutPolicy.TryGetToolbarAction(hiddenQ, out _))
         {
             throw new InvalidOperationException("Q must not be an implicit shortcut.");
+        }
+
+        var hiddenNewQuery = new ConsoleKeyInfo(
+            'n',
+            ConsoleKey.N,
+            shift: false,
+            alt: false,
+            control: true
+        );
+        if (ShortcutPolicy.TryGetToolbarAction(hiddenNewQuery, out _))
+        {
+            throw new InvalidOperationException(
+                "Ctrl+N must stay in the Connections menu, not global shortcuts."
+            );
         }
     }
 

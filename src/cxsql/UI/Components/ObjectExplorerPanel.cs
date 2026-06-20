@@ -10,6 +10,7 @@ namespace CxSql.UI.Components;
 
 public sealed class ObjectExplorerPanel
 {
+    private static readonly object ConnectionsRootTag = new();
     private readonly TreeControl tree;
     private IReadOnlyList<DatabaseConnection> connections = [];
     private DatabaseConnection? activeConnection;
@@ -44,21 +45,36 @@ public sealed class ObjectExplorerPanel
 
         tree.NodeActivated += (_, args) =>
         {
-            if (args.Node?.Tag is DatabaseObject databaseObject)
+            switch (args.Node?.Tag)
             {
-                ObjectActivated?.Invoke(databaseObject);
+                case DatabaseConnection connection:
+                    ConnectionActivated?.Invoke(connection);
+                    break;
+                case DatabaseObject databaseObject:
+                    ObjectActivated?.Invoke(databaseObject);
+                    break;
             }
         };
 
         tree.MouseRightClick += (_, args) =>
         {
-            switch (tree.LastRightClickedNode?.Tag)
+            var rightClickedNode = tree.LastRightClickedNode;
+            if (rightClickedNode is null)
+            {
+                ConnectionsRightClicked?.Invoke(args);
+                return;
+            }
+
+            switch (rightClickedNode.Tag)
             {
                 case DatabaseConnection connection:
                     ConnectionRightClicked?.Invoke(connection, args);
                     break;
                 case DatabaseObject databaseObject:
                     ObjectRightClicked?.Invoke(databaseObject, args);
+                    break;
+                case not null when ReferenceEquals(rightClickedNode.Tag, ConnectionsRootTag):
+                    ConnectionsRightClicked?.Invoke(args);
                     break;
             }
         };
@@ -68,7 +84,11 @@ public sealed class ObjectExplorerPanel
 
     public event Action<DatabaseConnection>? ConnectionSelected;
 
+    public event Action<DatabaseConnection>? ConnectionActivated;
+
     public event Action<DatabaseConnection, MouseEventArgs>? ConnectionRightClicked;
+
+    public event Action<MouseEventArgs>? ConnectionsRightClicked;
 
     public event Action<DatabaseObject>? ObjectSelected;
 
@@ -92,14 +112,11 @@ public sealed class ObjectExplorerPanel
     {
         tree.Clear();
 
-        var connectionsRoot = tree.AddRootNode("[bold cyan]Connections[/]");
-        connectionsRoot.IsExpanded = true;
-
         foreach (var connection in connections)
         {
             var activeMarker =
-                activeConnection?.Id == connection.Id ? "[green]*[/] " : string.Empty;
-            var node = connectionsRoot.AddChild(
+                activeConnection?.Id == connection.Id ? "[green]✳️[/] " : "[grey50]○[/] ";
+            var node = tree.AddRootNode(
                 $"{activeMarker}[white]{MarkupParser.Escape(connection.Name)}[/] [grey50]({connection.DatabaseType})[/]"
             );
             node.Tag = connection;
@@ -113,7 +130,8 @@ public sealed class ObjectExplorerPanel
 
         if (connections.Count == 0)
         {
-            connectionsRoot.AddChild("[grey50]No saved connections[/]");
+            var emptyNode = tree.AddRootNode("[grey50]No saved connections[/]");
+            emptyNode.Tag = ConnectionsRootTag;
         }
     }
 

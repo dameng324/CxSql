@@ -46,6 +46,7 @@ public static class Program
                 connectionManager,
                 providerRegistry,
                 queryExecutionService,
+                queryHistoryService,
                 new CsvExportService(),
                 loggerFactory.CreateLogger<SharpConsoleSqlClient>()
             );
@@ -68,8 +69,8 @@ public static class Program
         Console.WriteLine();
         Console.WriteLine("Visible shortcuts:");
         Console.WriteLine("  F5      Execute current SQL");
-        Console.WriteLine("  Ctrl+N  New query");
         Console.WriteLine("  Ctrl+S  Save SQL");
+        Console.WriteLine("  Ctrl+Q  Exit");
         Console.WriteLine("  Esc     Close dialog");
         Console.WriteLine();
         Console.WriteLine("No other implicit shortcuts are assigned.");

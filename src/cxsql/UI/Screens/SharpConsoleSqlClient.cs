@@ -13,6 +13,7 @@ using SharpConsoleUI.Extensions;
 using SharpConsoleUI.Helpers;
 using SharpConsoleUI.Highlighting;
 using SharpConsoleUI.Layout;
+using SharpConsoleUI.Parsing;
 using SharpConsoleUI.Rendering;
 
 namespace CxSql.UI.Screens;
@@ -21,24 +22,36 @@ public sealed class SharpConsoleSqlClient(
     ConnectionManager connectionManager,
     DatabaseProviderRegistry providerRegistry,
     QueryExecutionService queryExecutionService,
+    QueryHistoryService queryHistoryService,
     CsvExportService csvExportService,
     ILogger<SharpConsoleSqlClient> logger
 )
 {
+    private const int ResultGridTabIndex = 0;
+    private const int MessagesTabIndex = 1;
+    private const int MaxMessageLines = 240;
+    private const int MaxStatusLength = 180;
+
     private readonly List<QueryEditorTab> queryTabs = [];
     private readonly ObjectExplorerPanel objectExplorer = new();
     private readonly QueryResultDataSource resultDataSource = new();
-    private readonly ConnectionSummaryDataSource connectionDataSource = new();
+    private readonly SqlCompletionService completionService = new();
+    private readonly Dictionary<string, IReadOnlyList<DatabaseColumn>> knownColumnsByObject = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+    private readonly List<string> errorMessageLines = [];
 
     private ConsoleWindowSystem windowSystem = null!;
     private Window mainWindow = null!;
-    private ToolbarControl toolbar = null!;
+    private StatusBarControl headerBar = null!;
+    private ToolbarControl queryToolbar = null!;
     private TabControl editorTabs = null!;
     private TabControl bottomTabs = null!;
     private TableControl resultTable = null!;
-    private TableControl connectionTable = null!;
-    private MarkupControl messageLog = null!;
+    private MarkupControl messagesPanel = null!;
     private MarkupControl statusLine = null!;
+    private SqlContextMenuController contextMenuController = null!;
+    private SqlCompletionController completionController = null!;
 
     private IReadOnlyList<DatabaseConnection> connections = [];
     private IReadOnlyList<DatabaseObject> currentObjects = [];
@@ -46,6 +59,9 @@ public sealed class SharpConsoleSqlClient(
     private QueryResult? lastResult;
     private CancellationTokenSource? executionCts;
     private int queryNumber;
+    private bool suppressCompletion;
+    private MultilineEditControl? lastCompletionEditor;
+    private string lastCompletionPrefix = string.Empty;
 
     public int Run(string[] args)
     {
@@ -79,16 +95,31 @@ public sealed class SharpConsoleSqlClient(
 
     private void BuildUi()
     {
-        toolbar = BuildToolbar();
+        headerBar = BuildHeaderBar();
+        queryToolbar = BuildQueryToolbar();
         var topRule = Controls.RuleBuilder().StickyTop().WithColor(Color.Grey27).Build();
         var bottomRule = Controls.RuleBuilder().StickyBottom().WithColor(Color.Grey27).Build();
 
-        objectExplorer.ConnectionSelected += connection => _ = OpenConnectionAsync(connection);
-        objectExplorer.ObjectActivated += databaseObject => _ = PreviewObjectAsync(databaseObject);
-        objectExplorer.ObjectRightClicked += (databaseObject, _) =>
-            ShowObjectContext(databaseObject);
-        objectExplorer.ConnectionRightClicked += (connection, _) =>
-            ShowConnectionContext(connection);
+        objectExplorer.ConnectionSelected += connection =>
+            UpdateStatus(
+                $"Selected {connection.Name}. Double-click to open, or right-click for actions."
+            );
+        objectExplorer.ConnectionActivated += connection => _ = OpenConnectionAsync(connection);
+        objectExplorer.ConnectionsRightClicked += args =>
+        {
+            ShowConnectionsContext(args);
+        };
+        objectExplorer.ObjectSelected += databaseObject => _ = LoadColumnsAsync(databaseObject);
+        objectExplorer.ObjectActivated += databaseObject =>
+            _ = OpenObjectDetailsAsync(databaseObject);
+        objectExplorer.ObjectRightClicked += (databaseObject, args) =>
+        {
+            ShowObjectContext(databaseObject, args);
+        };
+        objectExplorer.ConnectionRightClicked += (connection, args) =>
+        {
+            ShowConnectionContext(connection, args);
+        };
 
         editorTabs = new TabControlBuilder().WithHeaderStyle(TabHeaderStyle.Classic).Fill().Build();
         editorTabs.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -132,46 +163,29 @@ public sealed class SharpConsoleSqlClient(
             .Build();
         resultTable.TruncationFade = true;
         resultTable.ClearSelectionOnEmptyClick = true;
-        resultTable.MouseRightClick += (_, _) => ShowResultGridContext();
+        resultTable.MouseRightClick += (_, args) => ShowResultGridContext(args);
 
-        messageLog = Controls
+        messagesPanel = Controls
             .Markup()
-            .AddLine("[grey70]Messages will appear here after execution.[/]")
+            .AddLine("[grey70]Execution messages will appear here.[/]")
+            .AddLine("[grey50]Latest message is also mirrored to the status bar.[/]")
             .WithMargin(1, 0, 1, 0)
             .WithVerticalAlignment(VerticalAlignment.Fill)
             .Build();
 
-        connectionTable = Controls
-            .Table()
-            .WithDataSource(connectionDataSource)
-            .Interactive()
-            .WithSorting()
-            .WithFiltering()
-            .WithFuzzyFilter()
-            .WithColumnSeparator('|', Color.Grey27)
-            .WithBorderStyle(BorderStyle.None)
-            .WithHeaderColors(Color.Grey70, new Color(25, 35, 55))
-            .WithVerticalAlignment(VerticalAlignment.Fill)
-            .WithHorizontalAlignment(HorizontalAlignment.Stretch)
-            .Build();
-        connectionTable.RowActivated += (_, rowIndex) =>
-        {
-            if (connectionDataSource.GetRowTag(rowIndex) is DatabaseConnection connection)
-            {
-                _ = OpenConnectionAsync(connection);
-            }
-        };
-
         bottomTabs = new TabControlBuilder()
             .WithHeaderStyle(TabHeaderStyle.Classic)
-            .AddTab("Result Grid", resultTable)
-            .AddTab("Messages", messageLog)
-            .AddTab("Connections", connectionTable)
+            .AddTab("ResultGrid", resultTable)
+            .AddTab("Messages", messagesPanel)
             .Fill()
             .Build();
         bottomTabs.HorizontalAlignment = HorizontalAlignment.Stretch;
         bottomTabs.VerticalAlignment = VerticalAlignment.Fill;
         bottomTabs.BackgroundColor = Color.Transparent;
+        bottomTabs.TabChanged += (_, _) =>
+        {
+            completionController.Dismiss();
+        };
 
         var editorStack = Controls
             .HorizontalGrid()
@@ -179,25 +193,19 @@ public sealed class SharpConsoleSqlClient(
             .WithVerticalAlignment(VerticalAlignment.Fill)
             .Column(column =>
             {
-                editorTabs.Height = 13;
+                editorTabs.Height = 12;
+                column.Add(queryToolbar);
                 column.Add(editorTabs);
                 column.Add(Controls.HorizontalSplitter().WithMinHeights(8, 6).Build());
                 column.Add(bottomTabs);
             })
             .Build();
 
-        var leftHeader = Controls
-            .StatusBar()
-            .AddLeftText("[grey70]Connection & Object Tree[/]")
-            .WithMargin(1, 0, 0, 0)
-            .Build();
-        leftHeader.BackgroundColor = new Color(40, 50, 70, 160);
-
         var mainGrid = Controls
             .HorizontalGrid()
             .WithAlignment(HorizontalAlignment.Stretch)
             .WithVerticalAlignment(VerticalAlignment.Fill)
-            .Column(column => column.Width(34).Add(leftHeader).Add(objectExplorer.Control))
+            .Column(column => column.Width(34).Add(objectExplorer.Control))
             .Column(column => column.Flex(1).Add(editorStack))
             .WithSplitterAfter(0)
             .Build();
@@ -208,7 +216,7 @@ public sealed class SharpConsoleSqlClient(
         }
 
         statusLine = Controls
-            .Markup("[grey70]Ready. Mouse-first UI. Shortcuts shown on toolbar only.[/]")
+            .Markup("[grey70]Ready. Left panel manages connections. Exit: Ctrl+Q.[/]")
             .StickyBottom()
             .WithMargin(1, 0, 1, 0)
             .Build();
@@ -226,38 +234,48 @@ public sealed class SharpConsoleSqlClient(
             .Minimizable(false)
             .Maximizable(false)
             .WithBackgroundGradient(gradient, GradientDirection.Vertical)
-            .AddControl(toolbar)
+            .AddControl(headerBar)
             .AddControl(topRule)
             .AddControl(mainGrid)
             .AddControl(bottomRule)
             .AddControl(statusLine)
             .OnKeyPressed(OnGlobalKeyPressed)
             .Build();
+
+        contextMenuController = new SqlContextMenuController(mainWindow);
+        completionController = new SqlCompletionController(mainWindow, AcceptCompletion);
+        mainWindow.PreviewKeyPressed += OnPreviewKeyPressed;
     }
 
-    private ToolbarControl BuildToolbar()
+    private StatusBarControl BuildHeaderBar()
+    {
+        return Controls
+            .StatusBar()
+            .StickyTop()
+            .WithMargin(1, 0, 1, 0)
+            .AddLeftText("[bold cyan]cxsql[/]", () => UpdateStatus("cxsql"))
+            .AddCenterText(
+                "[grey50]Mouse-first terminal SQL client[/]",
+                () => UpdateStatus("Use the left panel for connection actions.")
+            )
+            .AddRight("Exit", "Ctrl+Q", ExitApplication)
+            .Build();
+    }
+
+    private ToolbarControl BuildQueryToolbar()
     {
         var builder = Controls
             .Toolbar()
-            .StickyTop()
             .WithSpacing(1)
             .WithWrap()
             .WithMargin(1, 0, 1, 0)
             .WithBackgroundColor(Color.Transparent)
             .WithBelowLineColor(Color.Grey27);
 
-        AddToolbarButton(builder, "New Connection", () => _ = NewConnectionAsync());
-        AddToolbarButton(builder, "Open Connection", () => _ = SelectConnectionAsync());
-        AddToolbarButton(
-            builder,
-            "New Query [grey50]Ctrl+N[/]",
-            () => CreateQueryTab(isInitial: false)
-        );
         AddToolbarButton(builder, "Execute [grey50]F5[/]", () => _ = ExecuteCurrentSqlAsync());
         AddToolbarButton(builder, "Stop", StopExecution);
         AddToolbarButton(builder, "Save SQL [grey50]Ctrl+S[/]", () => _ = SaveSqlAsync());
-        AddToolbarButton(builder, "Export", () => _ = ExportCsvAsync());
-        AddToolbarButton(builder, "Refresh", () => _ = RefreshObjectsAsync());
+        AddToolbarButton(builder, "History", () => _ = ShowHistoryAsync());
 
         return builder.Build();
     }
@@ -276,8 +294,9 @@ public sealed class SharpConsoleSqlClient(
             .WithLineNumbers(true)
             .WithHighlightCurrentLine(true)
             .WithAutoIndent(true)
-            .WithEditingHints(true)
-            .WithEscapeExitsEditMode(true)
+            .IsEditing(true)
+            .WithEditingHints(false)
+            .WithEscapeExitsEditMode(false)
             .NoWrap()
             .WithHorizontalScrollbar(ScrollbarVisibility.Auto)
             .WithVerticalScrollbar(ScrollbarVisibility.Auto)
@@ -293,30 +312,44 @@ public sealed class SharpConsoleSqlClient(
         }
 
         var editor = editorBuilder.Build();
+        editor.ContentChanged += (_, content) => OnEditorContentChanged(editor, content);
+        editor.MouseRightClick += (_, args) => ShowEditorContext(editor, args);
 
         var tab = new QueryEditorTab(title, editor);
         queryTabs.Add(tab);
         editorTabs.AddTab(title, editor, isClosable: !isInitial);
         editorTabs.ActiveTabIndex = editorTabs.TabCount - 1;
         editor.RequestFocus();
-        UpdateStatus($"{title} opened. Click Execute or press F5.");
+        UpdateStatus($"{title} opened. Query actions are above the editor.");
     }
 
     private async Task LoadConnectionsAsync()
     {
         connections = await connectionManager.ListAsync(CancellationToken.None);
-        connectionDataSource.SetConnections(connections);
         objectExplorer.SetConnections(connections, activeConnection, currentObjects);
         UpdateStatus(
             connections.Count == 0
-                ? "No connections yet. Click New Connection."
-                : "Connections loaded."
+                ? "No connections yet. Right-click the left panel and choose New Connection."
+                : "Connections loaded. Double-click a connection to open it."
         );
     }
 
     private async Task NewConnectionAsync()
     {
-        var request = await NewConnectionModal.ShowAsync(windowSystem, mainWindow);
+        var request = await NewConnectionModal.ShowAsync(
+            windowSystem,
+            mainWindow,
+            async testRequest =>
+                await connectionManager.TestAsync(
+                    new DatabaseConnection
+                    {
+                        Name = testRequest.Name,
+                        DatabaseType = testRequest.DatabaseType,
+                        ConnectionString = testRequest.ConnectionString,
+                    },
+                    CancellationToken.None
+                )
+        );
         if (request is null)
         {
             return;
@@ -331,15 +364,10 @@ public sealed class SharpConsoleSqlClient(
                 CancellationToken.None
             );
 
-            activeConnection = connection;
             connections = await connectionManager.ListAsync(CancellationToken.None);
-            connectionDataSource.SetConnections(connections);
+            activeConnection = connection;
             await RefreshObjectsAsync();
-            ShowNotification(
-                "Connection",
-                $"Created {connection.Name}.",
-                NotificationSeverity.Success
-            );
+            UpdateStatus($"Created and opened {connection.Name}.");
         }
         catch (Exception ex)
         {
@@ -353,43 +381,52 @@ public sealed class SharpConsoleSqlClient(
         {
             ShowNotification(
                 "Open Connection",
-                "No saved connections. Click New Connection.",
+                "No saved connections. Use New Connection first.",
                 NotificationSeverity.Warning
             );
-            bottomTabs.ActiveTabIndex = 2;
-            connectionTable.RequestFocus();
+            UpdateStatus("No saved connections.");
             return;
         }
 
-        bottomTabs.ActiveTabIndex = 2;
-        connectionTable.RequestFocus();
-        UpdateStatus(
-            "Double-click a row in Connections or select a connection in the object tree."
+        contextMenuController.Show(
+            connections.Select(connection => new SqlContextMenuItem(
+                connection.Name,
+                connection.DatabaseType.ToString(),
+                () => OpenConnectionAsync(connection)
+            )),
+            objectExplorer.Control.ActualX + 2,
+            objectExplorer.Control.ActualY + 1,
+            objectExplorer.Control
         );
-        await Task.CompletedTask;
     }
 
     private async Task OpenConnectionAsync(DatabaseConnection connection)
     {
-        activeConnection = connection;
+        UpdateStatus($"Opening {connection.Name}...");
         var test = await connectionManager.TestAsync(connection, CancellationToken.None);
         if (!test.Succeeded)
         {
-            UpdateStatus($"Connection failed: {test.ErrorMessage}");
+            AppendMessage(
+                SqlExecutionMessageLevel.Error,
+                $"Connection failed: {connection.Name}",
+                test.ErrorMessage ?? "Unknown error."
+            );
             ShowNotification(
                 "Connection failed",
-                test.ErrorMessage ?? "Unknown error.",
+                TruncateStatus(test.ErrorMessage ?? "Unknown error."),
                 NotificationSeverity.Danger
             );
             return;
         }
 
+        activeConnection = connection;
         await RefreshObjectsAsync();
-        ShowNotification("Connection opened", connection.Name, NotificationSeverity.Success);
+        UpdateStatus($"Opened {connection.Name}.");
     }
 
     private async Task RefreshObjectsAsync()
     {
+        knownColumnsByObject.Clear();
         if (activeConnection is null)
         {
             currentObjects = [];
@@ -417,6 +454,46 @@ public sealed class SharpConsoleSqlClient(
         }
     }
 
+    private async Task<IReadOnlyList<DatabaseColumn>> LoadColumnsAsync(
+        DatabaseObject databaseObject
+    )
+    {
+        if (activeConnection is null)
+        {
+            return [];
+        }
+
+        var key = GetObjectKey(databaseObject);
+        if (knownColumnsByObject.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        try
+        {
+            var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
+            await using var connection = provider.CreateConnection(
+                activeConnection.ConnectionString
+            );
+            var columns = await provider.GetColumnsAsync(
+                connection,
+                databaseObject,
+                CancellationToken.None
+            );
+            knownColumnsByObject[key] = columns;
+            return columns;
+        }
+        catch (Exception ex)
+        {
+            AppendMessage(
+                SqlExecutionMessageLevel.Warning,
+                $"Load columns failed: {databaseObject.DisplayName}",
+                ex.Message
+            );
+            return [];
+        }
+    }
+
     private async Task PreviewObjectAsync(DatabaseObject databaseObject)
     {
         if (activeConnection is null)
@@ -426,6 +503,7 @@ public sealed class SharpConsoleSqlClient(
 
         try
         {
+            await LoadColumnsAsync(databaseObject);
             var previewSql = providerRegistry
                 .GetPreviewSqlBuilder(activeConnection.DatabaseType)
                 .BuildPreviewSql(databaseObject, 100);
@@ -453,6 +531,7 @@ public sealed class SharpConsoleSqlClient(
         if (activeConnection is null)
         {
             ShowNotification("Execute", "Open a connection first.", NotificationSeverity.Warning);
+            UpdateStatus("Open a connection before executing SQL.");
             return;
         }
 
@@ -477,18 +556,17 @@ public sealed class SharpConsoleSqlClient(
                 editor.Content,
                 executionCts.Token
             );
-            resultDataSource.SetResult(lastResult);
-            bottomTabs.ActiveTabIndex = lastResult.Success ? 0 : 1;
-            UpdateMessages(lastResult);
-            UpdateStatus(
-                lastResult.Success
-                    ? $"Executed in {lastResult.ElapsedMilliseconds} ms. Rows: {lastResult.Rows.Count}."
-                    : $"SQL failed: {lastResult.ErrorMessage}"
-            );
+            resultDataSource.SetResult(lastResult.Success ? lastResult : null);
+            if (lastResult.Success)
+            {
+                bottomTabs.ActiveTabIndex = ResultGridTabIndex;
+            }
+
+            RecordQueryResultMessages(lastResult);
         }
         catch (OperationCanceledException)
         {
-            UpdateStatus("Execution canceled.");
+            AppendMessage(SqlExecutionMessageLevel.Warning, "Execute", "Execution canceled.");
             ShowNotification("Execute", "Execution canceled.", NotificationSeverity.Warning);
         }
         finally
@@ -539,6 +617,7 @@ public sealed class SharpConsoleSqlClient(
 
             await File.WriteAllTextAsync(path, editor.Content);
             ShowNotification("Save SQL", $"Saved to {path}.", NotificationSeverity.Success);
+            UpdateStatus($"Saved SQL to {path}.");
         }
         catch (Exception ex)
         {
@@ -574,6 +653,7 @@ public sealed class SharpConsoleSqlClient(
         {
             await csvExportService.ExportAsync(lastResult, path, CancellationToken.None);
             ShowNotification("Export", $"Exported to {path}.", NotificationSeverity.Success);
+            UpdateStatus($"Exported result grid to {path}.");
         }
         catch (Exception ex)
         {
@@ -581,71 +661,920 @@ public sealed class SharpConsoleSqlClient(
         }
     }
 
-    private void ShowConnectionContext(DatabaseConnection connection)
+    private void ShowConnectionsContext()
     {
-        ShowNotification(
-            "Connection menu",
-            $"Right-click: Open/Refresh/Edit/Delete planned. Opening {connection.Name}.",
-            NotificationSeverity.Info
-        );
-        _ = OpenConnectionAsync(connection);
+        ShowConnectionsContext(null);
     }
 
-    private void ShowObjectContext(DatabaseObject databaseObject)
+    private void ShowConnectionsContext(SharpConsoleUI.Events.MouseEventArgs? args)
     {
-        ShowNotification(
-            "Table menu",
-            $"{databaseObject.DisplayName}: double-click previews data; context actions are queued for the next pass.",
-            NotificationSeverity.Info
+        var owner = objectExplorer.Control;
+        var anchorX = args is null ? owner.ActualX + 2 : owner.ActualX + args.Position.X;
+        var anchorY = args is null ? owner.ActualY + 1 : owner.ActualY + args.Position.Y;
+        contextMenuController.Show(
+            [
+                new SqlContextMenuItem("New Connection", null, NewConnectionAsync),
+                new SqlContextMenuItem("Open Connection", null, SelectConnectionAsync),
+                SqlContextMenuItem.Create("New Query", () => CreateQueryTab(isInitial: false)),
+                new SqlContextMenuItem("History", null, ShowHistoryAsync),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem("Refresh Active Connection", "F5", RefreshObjectsAsync),
+                SqlContextMenuItem.Separator(),
+                SqlContextMenuItem.Create("Exit", ExitApplication, "Ctrl+Q"),
+            ],
+            anchorX,
+            anchorY,
+            owner
         );
     }
 
-    private void ShowResultGridContext()
+    private void ShowConnectionContext(
+        DatabaseConnection connection,
+        SharpConsoleUI.Events.MouseEventArgs args
+    )
     {
-        ShowNotification(
-            "Result grid",
-            "Use Export button for CSV. Copy cell/row context menu is queued for the next pass.",
-            NotificationSeverity.Info
+        var owner = objectExplorer.Control;
+        contextMenuController.Show(
+            [
+                new SqlContextMenuItem(
+                    "Open Connection",
+                    null,
+                    () => OpenConnectionAsync(connection)
+                ),
+                new SqlContextMenuItem(
+                    "Test Connection",
+                    null,
+                    () => TestConnectionAsync(connection)
+                ),
+                SqlContextMenuItem.Create("New Query", () => CreateQueryTab(isInitial: false)),
+                new SqlContextMenuItem("History", null, ShowHistoryAsync),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem(
+                    "Edit Connection",
+                    null,
+                    () => EditConnectionAsync(connection)
+                ),
+                new SqlContextMenuItem(
+                    "Delete Connection",
+                    null,
+                    () => DeleteConnectionAsync(connection)
+                ),
+                SqlContextMenuItem.Create("Close Connection", () => CloseConnection(connection)),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem("Refresh Objects", "F5", RefreshObjectsAsync),
+                SqlContextMenuItem.Create(
+                    "Copy Connection String",
+                    () => CopyToClipboard(connection.ConnectionString)
+                ),
+            ],
+            owner.ActualX + args.Position.X,
+            owner.ActualY + args.Position.Y,
+            owner
         );
     }
 
-    private void UpdateMessages(QueryResult result)
+    private void ShowObjectContext(
+        DatabaseObject databaseObject,
+        SharpConsoleUI.Events.MouseEventArgs args
+    )
     {
-        var lines = new List<string>
-        {
-            result.Success ? "[green]Success[/]" : "[red]Failed[/]",
-            $"Elapsed: {result.ElapsedMilliseconds} ms",
-            $"Rows: {result.Rows.Count}",
-        };
+        _ = LoadColumnsAsync(databaseObject);
+        var owner = objectExplorer.Control;
+        contextMenuController.Show(
+            [
+                new SqlContextMenuItem(
+                    "Open Details",
+                    null,
+                    () => OpenObjectDetailsAsync(databaseObject)
+                ),
+                new SqlContextMenuItem(
+                    "Preview Data",
+                    null,
+                    () => PreviewObjectAsync(databaseObject)
+                ),
+                new SqlContextMenuItem(
+                    "Export Table CSV",
+                    null,
+                    () => ExportObjectCsvAsync(databaseObject)
+                ),
+                SqlContextMenuItem.Separator(),
+                SqlContextMenuItem.Create(
+                    "New Query Here",
+                    () =>
+                        SetEditorContent($"SELECT *\nFROM {GetObjectReference(databaseObject)};\n")
+                ),
+                SqlContextMenuItem.Create(
+                    "Generate SELECT",
+                    () => SetEditorContent(BuildSelectSql(databaseObject))
+                ),
+                SqlContextMenuItem.Create(
+                    "Generate INSERT",
+                    () => SetEditorContent(BuildInsertSql(databaseObject))
+                ),
+                SqlContextMenuItem.Create(
+                    "Generate UPDATE",
+                    () => SetEditorContent(BuildUpdateSql(databaseObject))
+                ),
+                SqlContextMenuItem.Create(
+                    "Generate DELETE",
+                    () => SetEditorContent(BuildDeleteSql(databaseObject))
+                ),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem(
+                    "Show Columns",
+                    null,
+                    () => ShowColumnsAsync(databaseObject)
+                ),
+                new SqlContextMenuItem("Copy DDL", null, () => CopyObjectDdlAsync(databaseObject)),
+                SqlContextMenuItem.Create(
+                    "Copy Name",
+                    () => CopyToClipboard(databaseObject.DisplayName)
+                ),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem("Refresh Objects", "F5", RefreshObjectsAsync),
+            ],
+            owner.ActualX + args.Position.X,
+            owner.ActualY + args.Position.Y,
+            owner
+        );
+    }
 
-        if (result.AffectedRows is not null)
+    private void ShowResultGridContext(SharpConsoleUI.Events.MouseEventArgs args)
+    {
+        contextMenuController.Show(
+            [
+                new SqlContextMenuItem("Export CSV", null, ExportCsvAsync),
+                new SqlContextMenuItem("Refresh Query", "F5", ExecuteCurrentSqlAsync),
+                SqlContextMenuItem.Separator(),
+                SqlContextMenuItem.Create("Copy Cell", CopySelectedCell),
+                SqlContextMenuItem.Create("Copy Row", CopySelectedRow),
+                SqlContextMenuItem.Create("Copy All", CopyAllResults),
+                SqlContextMenuItem.Separator(),
+                SqlContextMenuItem.Create(
+                    "Clear Filter",
+                    () =>
+                    {
+                        resultDataSource.ClearFilter();
+                        UpdateStatus("ResultGrid filter cleared.");
+                    }
+                ),
+            ],
+            resultTable.ActualX + args.Position.X,
+            resultTable.ActualY + args.Position.Y,
+            resultTable
+        );
+    }
+
+    private void ShowEditorContext(
+        MultilineEditControl editor,
+        SharpConsoleUI.Events.MouseEventArgs args
+    )
+    {
+        contextMenuController.Show(
+            [
+                SqlContextMenuItem.Create(
+                    "Cut",
+                    () =>
+                        editor.ProcessKey(new ConsoleKeyInfo('x', ConsoleKey.X, false, false, true))
+                ),
+                SqlContextMenuItem.Create(
+                    "Copy",
+                    () =>
+                        editor.ProcessKey(new ConsoleKeyInfo('c', ConsoleKey.C, false, false, true))
+                ),
+                SqlContextMenuItem.Create(
+                    "Paste",
+                    () =>
+                        editor.ProcessKey(new ConsoleKeyInfo('v', ConsoleKey.V, false, false, true))
+                ),
+                SqlContextMenuItem.Separator(),
+                SqlContextMenuItem.Create(
+                    "Select All",
+                    () =>
+                        editor.ProcessKey(new ConsoleKeyInfo('a', ConsoleKey.A, false, false, true))
+                ),
+                new SqlContextMenuItem("History", null, ShowHistoryAsync),
+                new SqlContextMenuItem("Save SQL", "Ctrl+S", SaveSqlAsync),
+            ],
+            editor.ActualX + args.Position.X,
+            editor.ActualY + args.Position.Y,
+            editor
+        );
+    }
+
+    private async Task OpenObjectDetailsAsync(DatabaseObject databaseObject)
+    {
+        if (activeConnection is null)
         {
-            lines.Add($"Affected rows: {result.AffectedRows}");
+            return;
         }
 
-        if (!string.IsNullOrWhiteSpace(result.ProviderErrorCode))
+        var tabTitle = GetObjectDetailsTabTitle(activeConnection, databaseObject);
+        var existingTabIndex = FindEditorTabIndex(tabTitle);
+        if (existingTabIndex >= 0)
         {
-            lines.Add($"Provider error code: {result.ProviderErrorCode}");
+            editorTabs.ActiveTabIndex = existingTabIndex;
+            UpdateStatus($"Activated existing details tab for {databaseObject.DisplayName}.");
+            return;
         }
 
-        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+        try
         {
-            lines.Add($"[red]{result.ErrorMessage}[/]");
+            var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
+            await using var connection = provider.CreateConnection(
+                activeConnection.ConnectionString
+            );
+            var details = await provider.GetObjectDetailsAsync(
+                connection,
+                databaseObject,
+                CancellationToken.None
+            );
+            knownColumnsByObject[GetObjectKey(databaseObject)] = details.Columns;
+
+            QueryResult? previewResult = null;
+            if (databaseObject.ObjectType is DatabaseObjectType.Table or DatabaseObjectType.View)
+            {
+                var previewSql = providerRegistry
+                    .GetPreviewSqlBuilder(activeConnection.DatabaseType)
+                    .BuildPreviewSql(databaseObject, 100);
+                previewResult = await provider.ExecuteSqlAsync(
+                    connection,
+                    previewSql,
+                    CancellationToken.None
+                );
+            }
+
+            var control = BuildObjectDetailsControl(details, previewResult);
+            editorTabs.AddTab(tabTitle, control, isClosable: true);
+            editorTabs.ActiveTabIndex = editorTabs.TabCount - 1;
+            UpdateStatus($"Opened details for {databaseObject.DisplayName}.");
+        }
+        catch (Exception ex)
+        {
+            ShowError("Open details failed", ex);
+        }
+    }
+
+    private async Task ExportObjectCsvAsync(DatabaseObject databaseObject)
+    {
+        if (activeConnection is null)
+        {
+            return;
         }
 
-        lines.Add(string.Empty);
+        if (
+            databaseObject.ObjectType
+            is not DatabaseObjectType.Table
+                and not DatabaseObjectType.View
+        )
+        {
+            ShowNotification(
+                "Export Table CSV",
+                "Only tables and views can be exported.",
+                NotificationSeverity.Warning
+            );
+            return;
+        }
+
+        var path = await TextInputModal.ShowAsync(
+            windowSystem,
+            mainWindow,
+            "Export Table CSV",
+            "CSV path: ",
+            $"{databaseObject.Name}.csv"
+        );
+        if (path is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
+            await using var connection = provider.CreateConnection(
+                activeConnection.ConnectionString
+            );
+            var sql = providerRegistry
+                .GetPreviewSqlBuilder(activeConnection.DatabaseType)
+                .BuildPreviewSql(databaseObject, 1000);
+            var result = await provider.ExecuteSqlAsync(connection, sql, CancellationToken.None);
+            await csvExportService.ExportAsync(result, path, CancellationToken.None);
+            UpdateStatus($"Exported {databaseObject.DisplayName} to {path}.");
+        }
+        catch (Exception ex)
+        {
+            ShowError("Export table failed", ex);
+        }
+    }
+
+    private async Task CopyObjectDdlAsync(DatabaseObject databaseObject)
+    {
+        if (activeConnection is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
+            await using var connection = provider.CreateConnection(
+                activeConnection.ConnectionString
+            );
+            var details = await provider.GetObjectDetailsAsync(
+                connection,
+                databaseObject,
+                CancellationToken.None
+            );
+            CopyToClipboard(details.Ddl);
+        }
+        catch (Exception ex)
+        {
+            ShowError("Copy DDL failed", ex);
+        }
+    }
+
+    private async Task ShowHistoryAsync()
+    {
+        var entries = await queryHistoryService.ListAsync(CancellationToken.None);
+        if (entries.Count == 0)
+        {
+            ShowNotification("History", "No query history yet.", NotificationSeverity.Warning);
+            return;
+        }
+
+        var selected = await QueryHistoryModal.ShowAsync(windowSystem, mainWindow, entries);
+        if (selected is null)
+        {
+            return;
+        }
+
+        SetEditorContent(selected.SqlText);
+        UpdateStatus("Loaded SQL from history.");
+    }
+
+    private async Task TestConnectionAsync(DatabaseConnection connection)
+    {
+        var result = await connectionManager.TestAsync(connection, CancellationToken.None);
+        if (result.Succeeded)
+        {
+            AppendMessage(
+                SqlExecutionMessageLevel.Info,
+                $"Connection test: {connection.Name}",
+                "Connection test succeeded."
+            );
+            return;
+        }
+
+        AppendMessage(
+            SqlExecutionMessageLevel.Error,
+            $"Connection test: {connection.Name}",
+            result.ErrorMessage ?? "Unknown error."
+        );
+        ShowNotification(
+            "Test Connection",
+            TruncateStatus(result.ErrorMessage ?? "Unknown error."),
+            NotificationSeverity.Danger
+        );
+    }
+
+    private async Task EditConnectionAsync(DatabaseConnection connection)
+    {
+        if (activeConnection?.Id == connection.Id)
+        {
+            UpdateStatus("Close this connection before editing its connection string or path.");
+            AppendMessage(
+                SqlExecutionMessageLevel.Warning,
+                "Edit connection",
+                "Close the connection before editing its connection string or SQLite file path."
+            );
+            return;
+        }
+
+        var request = await EditConnectionModal.ShowAsync(
+            windowSystem,
+            mainWindow,
+            connection,
+            async testRequest =>
+                await connectionManager.TestAsync(
+                    new DatabaseConnection
+                    {
+                        Name = testRequest.Name,
+                        DatabaseType = testRequest.DatabaseType,
+                        ConnectionString = testRequest.ConnectionString,
+                    },
+                    CancellationToken.None
+                )
+        );
+        if (request is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var updatedConnection = new DatabaseConnection
+            {
+                Id = connection.Id,
+                Name = request.Name,
+                DatabaseType = connection.DatabaseType,
+                ConnectionString = request.ConnectionString,
+                CreatedAtUnixMs = connection.CreatedAtUnixMs,
+                UpdatedAtUnixMs = connection.UpdatedAtUnixMs,
+            };
+            await connectionManager.UpdateAsync(updatedConnection, CancellationToken.None);
+            connections = await connectionManager.ListAsync(CancellationToken.None);
+
+            objectExplorer.SetConnections(connections, activeConnection, currentObjects);
+            UpdateStatus($"Updated connection {updatedConnection.Name}.");
+        }
+        catch (Exception ex)
+        {
+            ShowError("Edit connection failed", ex);
+        }
+    }
+
+    private async Task DeleteConnectionAsync(DatabaseConnection connection)
+    {
+        var confirmation = await TextInputModal.ShowAsync(
+            windowSystem,
+            mainWindow,
+            "Delete Connection",
+            "Type DELETE: ",
+            string.Empty,
+            $"This removes {connection.Name}. Type DELETE to confirm."
+        );
+        if (!string.Equals(confirmation, "DELETE", StringComparison.Ordinal))
+        {
+            UpdateStatus("Delete connection canceled.");
+            return;
+        }
+
+        try
+        {
+            await connectionManager.DeleteAsync(connection.Id, CancellationToken.None);
+            if (activeConnection?.Id == connection.Id)
+            {
+                activeConnection = null;
+                currentObjects = [];
+                knownColumnsByObject.Clear();
+                resultDataSource.SetResult(null);
+            }
+
+            connections = await connectionManager.ListAsync(CancellationToken.None);
+            objectExplorer.SetConnections(connections, activeConnection, currentObjects);
+            UpdateStatus($"Deleted connection {connection.Name}.");
+        }
+        catch (Exception ex)
+        {
+            ShowError("Delete connection failed", ex);
+        }
+    }
+
+    private void CloseConnection(DatabaseConnection connection)
+    {
+        if (activeConnection?.Id != connection.Id)
+        {
+            UpdateStatus($"{connection.Name} is not the active connection.");
+            return;
+        }
+
+        activeConnection = null;
+        currentObjects = [];
+        knownColumnsByObject.Clear();
+        objectExplorer.SetConnections(connections, activeConnection, currentObjects);
+        UpdateStatus($"Closed connection {connection.Name}.");
+    }
+
+    private async Task ShowColumnsAsync(DatabaseObject databaseObject)
+    {
+        var columns = await LoadColumnsAsync(databaseObject);
+        var details =
+            columns.Count == 0
+                ? "No columns loaded."
+                : string.Join(
+                    ", ",
+                    columns.Select(column =>
+                        $"{column.Name}{(string.IsNullOrWhiteSpace(column.DataType) ? string.Empty : $" {column.DataType}")}"
+                    )
+                );
+        AppendMessage(
+            SqlExecutionMessageLevel.Info,
+            $"Columns: {databaseObject.DisplayName}",
+            details
+        );
+        bottomTabs.ActiveTabIndex = MessagesTabIndex;
+    }
+
+    private void RecordQueryResultMessages(QueryResult result)
+    {
         foreach (var message in result.Messages)
         {
-            var color = message.Level switch
-            {
-                SqlExecutionMessageLevel.Error => "red",
-                SqlExecutionMessageLevel.Warning => "yellow",
-                _ => "grey70",
-            };
-            lines.Add($"[{color}]{message.Level}: {message.Message}[/]");
+            AppendMessage(message.Level, "SQL message", message.Message);
         }
 
-        messageLog.SetContent(lines);
+        if (result.Success)
+        {
+            AppendMessage(
+                SqlExecutionMessageLevel.Info,
+                "SQL executed",
+                $"Elapsed {result.ElapsedMilliseconds} ms. Rows: {result.Rows.Count}. Affected rows: {result.AffectedRows?.ToString() ?? "unknown"}."
+            );
+            return;
+        }
+
+        var details = result.ErrorMessage ?? "Unknown SQL error.";
+        if (!string.IsNullOrWhiteSpace(result.ProviderErrorCode))
+        {
+            details = $"{details} Provider error code: {result.ProviderErrorCode}.";
+        }
+
+        AppendMessage(SqlExecutionMessageLevel.Error, "SQL failed", details);
+        ShowNotification("SQL failed", TruncateStatus(details), NotificationSeverity.Danger);
+    }
+
+    private void SetEditorContent(string sql)
+    {
+        var editor = ActiveEditor;
+        if (editor is null)
+        {
+            CreateQueryTab(isInitial: false);
+            editor = ActiveEditor;
+        }
+
+        editor?.SetContent(sql);
+        editor?.RequestFocus();
+        UpdateStatus("SQL template inserted.");
+    }
+
+    private IWindowControl BuildObjectDetailsControl(
+        DatabaseObjectDetails details,
+        QueryResult? previewResult
+    )
+    {
+        var tabs = new TabControlBuilder()
+            .WithHeaderStyle(TabHeaderStyle.Classic)
+            .AddTab("Data", BuildDataTab(previewResult))
+            .AddTab(
+                "Structure",
+                BuildStringTable(
+                    ["Column", "Type", "Nullable", "Ordinal"],
+                    details
+                        .Columns.Select(column =>
+                            (IReadOnlyList<string>)
+                                [
+                                    column.Name,
+                                    column.DataType ?? string.Empty,
+                                    column.IsNullable ? "YES" : "NO",
+                                    column.Ordinal.ToString(),
+                                ]
+                        )
+                        .ToList()
+                )
+            )
+            .AddTab(
+                "Constraints",
+                BuildStringTable(
+                    ["Name", "Type", "Definition"],
+                    details
+                        .Constraints.Select(constraint =>
+                            (IReadOnlyList<string>)
+                                [
+                                    constraint.Name,
+                                    constraint.Type,
+                                    constraint.Definition ?? string.Empty,
+                                ]
+                        )
+                        .ToList()
+                )
+            )
+            .AddTab(
+                "Indexes",
+                BuildStringTable(
+                    ["Name", "Unique", "Definition"],
+                    details
+                        .Indexes.Select(index =>
+                            (IReadOnlyList<string>)
+                                [
+                                    index.Name,
+                                    index.IsUnique ? "YES" : "NO",
+                                    index.Definition ?? string.Empty,
+                                ]
+                        )
+                        .ToList()
+                )
+            )
+            .AddTab(
+                "Triggers",
+                BuildStringTable(
+                    ["Name", "Event", "Definition"],
+                    details
+                        .Triggers.Select(trigger =>
+                            (IReadOnlyList<string>)
+                                [
+                                    trigger.Name,
+                                    trigger.Event ?? string.Empty,
+                                    trigger.Definition ?? string.Empty,
+                                ]
+                        )
+                        .ToList()
+                )
+            )
+            .AddTab("DDL", BuildReadOnlySql(details.Ddl))
+            .Fill()
+            .Build();
+        tabs.HorizontalAlignment = HorizontalAlignment.Stretch;
+        tabs.VerticalAlignment = VerticalAlignment.Fill;
+        tabs.BackgroundColor = Color.Transparent;
+        return tabs;
+    }
+
+    private static TableControl BuildStringTable(
+        IReadOnlyList<string> headers,
+        IReadOnlyList<IReadOnlyList<string>> rows
+    )
+    {
+        return Controls
+            .Table()
+            .WithDataSource(new StringTableDataSource(headers, rows))
+            .Interactive()
+            .WithSorting()
+            .WithColumnResize()
+            .WithColumnSeparator('|', Color.Grey27)
+            .WithBorderStyle(BorderStyle.None)
+            .WithHeaderColors(Color.Grey70, new Color(25, 35, 55))
+            .WithHorizontalScrollbar(ScrollbarVisibility.Auto)
+            .WithVerticalScrollbar(ScrollbarVisibility.Auto)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .WithHorizontalAlignment(HorizontalAlignment.Stretch)
+            .Build();
+    }
+
+    private static IWindowControl BuildDataTab(QueryResult? previewResult)
+    {
+        if (previewResult is null)
+        {
+            return Controls
+                .Markup("[grey70]Data preview is available for tables and views.[/]")
+                .WithMargin(1)
+                .Build();
+        }
+
+        if (!previewResult.Success)
+        {
+            return Controls
+                .Markup(
+                    $"[red]{MarkupParser.Escape(previewResult.ErrorMessage ?? "Data preview failed.")}[/]"
+                )
+                .WithMargin(1)
+                .Build();
+        }
+
+        var dataSource = new QueryResultDataSource();
+        dataSource.SetResult(previewResult);
+        return Controls
+            .Table()
+            .WithDataSource(dataSource)
+            .Interactive()
+            .WithCellNavigation()
+            .WithSorting()
+            .WithFiltering()
+            .WithFuzzyFilter()
+            .WithColumnResize()
+            .WithColumnSeparator('|', Color.Grey27)
+            .WithBorderStyle(BorderStyle.None)
+            .WithHeaderColors(Color.Grey70, new Color(25, 35, 55))
+            .WithHorizontalScrollbar(ScrollbarVisibility.Auto)
+            .WithVerticalScrollbar(ScrollbarVisibility.Auto)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .WithHorizontalAlignment(HorizontalAlignment.Stretch)
+            .Build();
+    }
+
+    private static MultilineEditControl BuildReadOnlySql(string sql)
+    {
+        var builder = Controls
+            .MultilineEdit(sql)
+            .AsReadOnly(true)
+            .WithLineNumbers(true)
+            .NoWrap()
+            .WithHorizontalScrollbar(ScrollbarVisibility.Auto)
+            .WithVerticalScrollbar(ScrollbarVisibility.Auto)
+            .WithBackgroundColor(Color.Transparent)
+            .WithForegroundColor(Color.White)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .WithAlignment(HorizontalAlignment.Stretch);
+
+        var syntaxHighlighter = SyntaxHighlighters.For("sql");
+        if (syntaxHighlighter is not null)
+        {
+            builder.WithSyntaxHighlighter(syntaxHighlighter);
+        }
+
+        return builder.Build();
+    }
+
+    private string BuildSelectSql(DatabaseObject databaseObject)
+    {
+        var columns = GetKnownColumns(databaseObject);
+        var columnList =
+            columns.Count == 0
+                ? "*"
+                : string.Join(", ", columns.Select(column => QuoteIdentifier(column.Name)));
+        return $"SELECT {columnList}\nFROM {GetObjectReference(databaseObject)};\n";
+    }
+
+    private string BuildInsertSql(DatabaseObject databaseObject)
+    {
+        var columns = GetKnownColumns(databaseObject);
+        var columnList =
+            columns.Count == 0
+                ? "column_name"
+                : string.Join(", ", columns.Select(column => QuoteIdentifier(column.Name)));
+        var valueList =
+            columns.Count == 0
+                ? "value"
+                : string.Join(", ", columns.Select(column => $"@{column.Name}"));
+        return $"INSERT INTO {GetObjectReference(databaseObject)} ({columnList})\nVALUES ({valueList});\n";
+    }
+
+    private string BuildUpdateSql(DatabaseObject databaseObject)
+    {
+        var columns = GetKnownColumns(databaseObject);
+        var assignments =
+            columns.Count == 0
+                ? "column_name = value"
+                : string.Join(
+                    ",\n    ",
+                    columns.Select(column => $"{QuoteIdentifier(column.Name)} = @{column.Name}")
+                );
+        return $"UPDATE {GetObjectReference(databaseObject)}\nSET {assignments}\nWHERE condition;\n";
+    }
+
+    private string BuildDeleteSql(DatabaseObject databaseObject)
+    {
+        return $"DELETE FROM {GetObjectReference(databaseObject)}\nWHERE condition;\n";
+    }
+
+    private IReadOnlyList<DatabaseColumn> GetKnownColumns(DatabaseObject databaseObject)
+    {
+        return knownColumnsByObject.TryGetValue(GetObjectKey(databaseObject), out var columns)
+            ? columns
+            : [];
+    }
+
+    private string GetObjectReference(DatabaseObject databaseObject)
+    {
+        return string.IsNullOrWhiteSpace(databaseObject.Schema)
+            ? QuoteIdentifier(databaseObject.Name)
+            : $"{QuoteIdentifier(databaseObject.Schema)}.{QuoteIdentifier(databaseObject.Name)}";
+    }
+
+    private string QuoteIdentifier(string identifier)
+    {
+        if (activeConnection?.DatabaseType == DatabaseType.SqlServer)
+        {
+            return "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
+        }
+
+        return "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+    }
+
+    private static string GetObjectKey(DatabaseObject databaseObject)
+    {
+        return $"{databaseObject.Schema ?? string.Empty}.{databaseObject.Name}";
+    }
+
+    private static string GetObjectDetailsTabTitle(
+        DatabaseConnection connection,
+        DatabaseObject databaseObject
+    )
+    {
+        return $"{databaseObject.ObjectType}: {connection.Name}.{databaseObject.DisplayName}";
+    }
+
+    private int FindEditorTabIndex(string title)
+    {
+        var index = 0;
+        foreach (var tabTitle in editorTabs.TabTitles)
+        {
+            if (string.Equals(tabTitle, title, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+
+            index++;
+        }
+
+        return -1;
+    }
+
+    private void CopySelectedCell()
+    {
+        var value = resultDataSource.GetPlainCellValue(
+            resultTable.SelectedRowIndex,
+            resultTable.SelectedColumnIndex
+        );
+        CopyToClipboard(value);
+    }
+
+    private void CopySelectedRow()
+    {
+        var values = resultDataSource.GetPlainRowValues(resultTable.SelectedRowIndex);
+        CopyToClipboard(string.Join('\t', values));
+    }
+
+    private void CopyAllResults()
+    {
+        CopyToClipboard(resultDataSource.ToTabDelimitedText());
+    }
+
+    private void CopyToClipboard(string value)
+    {
+        ClipboardHelper.SetText(value);
+        UpdateStatus("Copied to clipboard.");
+    }
+
+    private void OnEditorContentChanged(MultilineEditControl editor, string content)
+    {
+        if (suppressCompletion || !ReferenceEquals(editor, ActiveEditor))
+        {
+            return;
+        }
+
+        var prefix = SqlCompletionService.GetCurrentPrefixAtCursor(
+            content,
+            editor.CurrentLine,
+            editor.CurrentColumn
+        );
+        if (prefix.Length < 2)
+        {
+            completionController.Dismiss();
+            lastCompletionEditor = null;
+            lastCompletionPrefix = string.Empty;
+            return;
+        }
+
+        if (ReferenceEquals(lastCompletionEditor, editor) && lastCompletionPrefix == prefix)
+        {
+            return;
+        }
+
+        var suggestions = completionService.GetSuggestions(
+            string.Empty,
+            currentObjects,
+            knownColumnsByObject.Values.SelectMany(columns => columns),
+            lastResult?.Columns ?? [],
+            maxSuggestions: 300
+        );
+        completionController.ShowOrUpdate(editor, suggestions, prefix);
+        if (completionController.IsOpen)
+        {
+            lastCompletionEditor = editor;
+            lastCompletionPrefix = prefix;
+        }
+        else
+        {
+            lastCompletionEditor = null;
+            lastCompletionPrefix = string.Empty;
+        }
+    }
+
+    private void AcceptCompletion(SqlCompletionSuggestion suggestion, int filterLength)
+    {
+        var editor = ActiveEditor;
+        if (editor is null)
+        {
+            return;
+        }
+
+        suppressCompletion = true;
+        lastCompletionEditor = null;
+        lastCompletionPrefix = string.Empty;
+        try
+        {
+            if (filterLength > 0)
+            {
+                editor.DeleteCharsBefore(filterLength);
+            }
+
+            editor.InsertText(suggestion.ReplacementText);
+            editor.RequestFocus();
+            UpdateStatus($"Inserted completion: {suggestion.ReplacementText}.");
+        }
+        finally
+        {
+            suppressCompletion = false;
+        }
+    }
+
+    private void OnPreviewKeyPressed(object? sender, KeyPressedEventArgs args)
+    {
+        if (contextMenuController.ProcessKey(args))
+        {
+            return;
+        }
+
+        completionController.ProcessKey(args);
     }
 
     private void OnGlobalKeyPressed(object? sender, KeyPressedEventArgs args)
@@ -658,21 +1587,21 @@ public sealed class SharpConsoleSqlClient(
         }
 
         if (
-            args.KeyInfo.Key == ConsoleKey.N
-            && args.KeyInfo.Modifiers.HasFlag(ConsoleModifiers.Control)
-        )
-        {
-            CreateQueryTab(isInitial: false);
-            args.Handled = true;
-            return;
-        }
-
-        if (
             args.KeyInfo.Key == ConsoleKey.S
             && args.KeyInfo.Modifiers.HasFlag(ConsoleModifiers.Control)
         )
         {
             _ = SaveSqlAsync();
+            args.Handled = true;
+            return;
+        }
+
+        if (
+            args.KeyInfo.Key == ConsoleKey.Q
+            && args.KeyInfo.Modifiers.HasFlag(ConsoleModifiers.Control)
+        )
+        {
+            ExitApplication();
             args.Handled = true;
         }
     }
@@ -693,18 +1622,81 @@ public sealed class SharpConsoleSqlClient(
     private void ShowError(string title, Exception exception)
     {
         logger.LogError(exception, "{Title}", title);
-        UpdateStatus($"{title}: {exception.Message}");
-        ShowNotification(title, exception.Message, NotificationSeverity.Danger);
+        AppendMessage(SqlExecutionMessageLevel.Error, title, exception.Message);
+        ShowNotification(title, TruncateStatus(exception.Message), NotificationSeverity.Danger);
+    }
+
+    private void AppendMessage(SqlExecutionMessageLevel level, string title, string message)
+    {
+        var color = level switch
+        {
+            SqlExecutionMessageLevel.Error => "red",
+            SqlExecutionMessageLevel.Warning => "yellow",
+            _ => "grey70",
+        };
+        var line = $"{DateTime.Now:HH:mm:ss} {level}: {title}: {message}";
+        foreach (var chunk in Wrap(line, 170))
+        {
+            errorMessageLines.Add($"[{color}]{MarkupParser.Escape(chunk)}[/]");
+        }
+
+        if (errorMessageLines.Count > MaxMessageLines)
+        {
+            errorMessageLines.RemoveRange(0, errorMessageLines.Count - MaxMessageLines);
+        }
+
+        messagesPanel?.SetContent(errorMessageLines);
+        UpdateStatus($"{level}: {title}: {message}");
+
+        if (
+            level == SqlExecutionMessageLevel.Error
+            && bottomTabs is not null
+            && bottomTabs.ActiveTabIndex != MessagesTabIndex
+        )
+        {
+            bottomTabs.ActiveTabIndex = MessagesTabIndex;
+        }
     }
 
     private void ShowNotification(string title, string message, NotificationSeverity severity)
     {
-        windowSystem.NotificationStateService.ShowNotification(title, message, severity);
+        windowSystem.NotificationStateService.ShowNotification(
+            title,
+            TruncateStatus(message),
+            severity
+        );
     }
 
     private void UpdateStatus(string message)
     {
-        statusLine?.SetContent([$"[grey70]{message}[/]"]);
+        statusLine?.SetContent([$"[grey70]{MarkupParser.Escape(TruncateStatus(message))}[/]"]);
+    }
+
+    private static string TruncateStatus(string message)
+    {
+        var singleLine = message.ReplaceLineEndings(" ");
+        return singleLine.Length <= MaxStatusLength
+            ? singleLine
+            : string.Concat(singleLine.AsSpan(0, MaxStatusLength - 3), "...");
+    }
+
+    private static IEnumerable<string> Wrap(string text, int width)
+    {
+        if (text.Length <= width)
+        {
+            yield return text;
+            yield break;
+        }
+
+        for (var index = 0; index < text.Length; index += width)
+        {
+            yield return text.Substring(index, Math.Min(width, text.Length - index));
+        }
+    }
+
+    private void ExitApplication()
+    {
+        windowSystem.RequestExit(0);
     }
 
     private static bool IsInteractiveTerminal()

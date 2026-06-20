@@ -19,6 +19,27 @@ public abstract class DatabaseProviderBase : IDatabaseProvider, IPreviewSqlBuild
         CancellationToken cancellationToken
     );
 
+    public abstract Task<IReadOnlyList<DatabaseColumn>> GetColumnsAsync(
+        DbConnection connection,
+        DatabaseObject databaseObject,
+        CancellationToken cancellationToken
+    );
+
+    public virtual async Task<DatabaseObjectDetails> GetObjectDetailsAsync(
+        DbConnection connection,
+        DatabaseObject databaseObject,
+        CancellationToken cancellationToken
+    )
+    {
+        var columns = await GetColumnsAsync(connection, databaseObject, cancellationToken);
+        return new DatabaseObjectDetails
+        {
+            DatabaseObject = databaseObject,
+            Columns = columns,
+            Ddl = BuildCreateTableSketch(databaseObject, columns),
+        };
+    }
+
     public abstract string BuildPreviewSql(DatabaseObject databaseObject, int rowLimit);
 
     public async Task<QueryResult> ExecuteSqlAsync(
@@ -144,6 +165,29 @@ public abstract class DatabaseProviderBase : IDatabaseProvider, IPreviewSqlBuild
         return objects;
     }
 
+    protected static async Task<List<DatabaseColumn>> ReadColumnsAsync(
+        DbConnection connection,
+        string sql,
+        Action<DbCommand>? configureCommand,
+        Func<DbDataReader, DatabaseColumn> map,
+        CancellationToken cancellationToken
+    )
+    {
+        await EnsureOpenAsync(connection, cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        configureCommand?.Invoke(command);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var columns = new List<DatabaseColumn>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            columns.Add(map(reader));
+        }
+
+        return columns;
+    }
+
     protected static string QuoteDouble(string identifier)
     {
         return "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
@@ -152,6 +196,31 @@ public abstract class DatabaseProviderBase : IDatabaseProvider, IPreviewSqlBuild
     protected static string QuoteBracket(string identifier)
     {
         return "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
+    }
+
+    protected static string BuildCreateTableSketch(
+        DatabaseObject databaseObject,
+        IReadOnlyList<DatabaseColumn> columns
+    )
+    {
+        if (
+            databaseObject.ObjectType
+            is not DatabaseObjectType.Table
+                and not DatabaseObjectType.View
+        )
+        {
+            return string.Empty;
+        }
+
+        var lines =
+            columns.Count == 0
+                ? ["    -- columns were not available"]
+                : columns
+                    .Select(column =>
+                        $"    {QuoteDouble(column.Name)} {column.DataType ?? "TEXT"}{(column.IsNullable ? string.Empty : " NOT NULL")}"
+                    )
+                    .ToList();
+        return $"CREATE TABLE {QuoteDouble(databaseObject.DisplayName)} (\n{string.Join(",\n", lines)}\n);";
     }
 
     private static IEnumerable<QueryColumn> ReadColumns(DbDataReader reader)

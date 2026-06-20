@@ -14,6 +14,18 @@ public interface IDatabaseProvider
         CancellationToken cancellationToken
     );
 
+    Task<IReadOnlyList<DatabaseColumn>> GetColumnsAsync(
+        DbConnection connection,
+        DatabaseObject databaseObject,
+        CancellationToken cancellationToken
+    );
+
+    Task<DatabaseObjectDetails> GetObjectDetailsAsync(
+        DbConnection connection,
+        DatabaseObject databaseObject,
+        CancellationToken cancellationToken
+    );
+
     Task<QueryResult> ExecuteSqlAsync(
         DbConnection connection,
         string sql,
