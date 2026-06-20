@@ -163,7 +163,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      NUGET_USER: ${{ inputs.nuget_user || vars.NUGET_USER }}
+      NUGET_USER: ${{ inputs.nuget_user || vars.NUGET_USER || env.NUGET_USER }}
 
     steps:
       - name: Checkout
