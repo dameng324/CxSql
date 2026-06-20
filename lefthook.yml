@@ -1,0 +1,4 @@
+pre-commit:
+  commands:
+    csharpier:
+      run: dotnet tool restore && dotnet tool run csharpier -- check .
