@@ -60,9 +60,10 @@ public abstract class ModalBase<TResult>
 
     protected virtual Window CreateWindow()
     {
+        var (width, height) = GetModalSize();
         return new WindowBuilder(WindowSystem)
             .WithTitle(GetTitle())
-            .WithSize(GetWidth(), GetHeight())
+            .WithSize(width, height)
             .Centered()
             .AsModal()
             .Minimizable(false)
@@ -80,6 +81,50 @@ public abstract class ModalBase<TResult>
                 }
             )
             .Build();
+    }
+
+    private (int Width, int Height) GetModalSize()
+    {
+        return (
+            ClampToTerminal(GetWidth(), GetTerminalWidth(), margin: 4, minimum: 44),
+            ClampToTerminal(GetHeight(), GetTerminalHeight(), margin: 3, minimum: 8)
+        );
+    }
+
+    private static int ClampToTerminal(int requested, int terminalSize, int margin, int minimum)
+    {
+        if (terminalSize <= 0)
+        {
+            return requested;
+        }
+
+        var available = Math.Max(1, terminalSize - margin);
+        var min = Math.Min(minimum, available);
+        return Math.Clamp(requested, min, available);
+    }
+
+    private static int GetTerminalWidth()
+    {
+        try
+        {
+            return Console.WindowWidth;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+    }
+
+    private static int GetTerminalHeight()
+    {
+        try
+        {
+            return Console.WindowHeight;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
     }
 
     protected virtual string GetTitle()

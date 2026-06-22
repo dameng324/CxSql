@@ -18,13 +18,16 @@ Navicat-like database management workflow adapted to a terminal TUI.
 cxsql now starts in a SharpConsoleUI window system:
 
 - Minimal top bar with the visible exit command.
-- Left connection and object tree with mouse context menus.
+- Left connection and object tree with visible New, Open, and Refresh actions plus
+  mouse context menus.
 - Center SQL editor tabs using `MultilineEditControl`.
 - Query toolbar with visible Execute, Stop, Save SQL, and History actions.
-- Bottom result area with tabs for result grid and messages.
+- Bottom result area with visible Export CSV, Copy All, and Clear Filter actions,
+  plus tabs for result grid and messages.
 - Draggable splitters between the object tree, editor, and result area.
 - Mouse activation for toolbar buttons, connection rows, object tree nodes, and
   result grid selection.
+- Query history includes search and SQL preview before loading an entry.
 
 ## UX Rules
 

@@ -59,12 +59,12 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
 
     protected override int GetWidth()
     {
-        return 78;
+        return 76;
     }
 
     protected override int GetHeight()
     {
-        return 25;
+        return 21;
     }
 
     protected override NewConnectionRequest? GetDefaultResult()
@@ -77,7 +77,7 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         typeTabs = new TabControlBuilder()
             .WithHeaderStyle(TabHeaderStyle.Classic)
             .WithActiveTab(0)
-            .WithHeight(4)
+            .WithHeight(3)
             .WithMargin(1, 1, 1, 0)
             .AddTab(
                 "SQLite",
@@ -113,12 +113,12 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         typeTabs.InactiveUnfocusedForegroundColor = Color.Grey50;
         typeTabs.TabChanged += (_, _) => SetTypeFromTab();
 
-        namePrompt = Controls.Prompt("Name: ").WithInputWidth(58).WithMargin(1, 1, 1, 0).Build();
+        namePrompt = Controls.Prompt("Name: ").WithInputWidth(52).WithMargin(1, 1, 1, 0).Build();
 
         modeTabs = new TabControlBuilder()
             .WithHeaderStyle(TabHeaderStyle.Classic)
             .WithActiveTab(0)
-            .WithHeight(4)
+            .WithHeight(3)
             .WithMargin(1, 0, 1, 0)
             .AddTab(
                 "Server",
@@ -147,11 +147,11 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
 
         connectionStringPrompt = Controls
             .Prompt(ConnectionInputMapper.GetInputLabel(selectedType))
-            .WithInputWidth(58)
+            .WithInputWidth(52)
             .WithMargin(1, 0, 1, 0)
             .Build();
 
-        hostPrompt = Controls.Prompt("IP/Host: ").WithInputWidth(58).WithMargin(1, 0, 1, 0).Build();
+        hostPrompt = Controls.Prompt("IP/Host: ").WithInputWidth(52).WithMargin(1, 0, 1, 0).Build();
         portPrompt = Controls
             .Prompt("Port: ")
             .WithInput(ConnectionInputMapper.GetDefaultPort(DatabaseType.PostgreSql).ToString())
@@ -160,18 +160,18 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
             .Build();
         databasePrompt = Controls
             .Prompt("Database (optional): ")
-            .WithInputWidth(46)
+            .WithInputWidth(40)
             .WithMargin(1, 0, 1, 0)
             .Build();
         usernamePrompt = Controls
             .Prompt("Username: ")
-            .WithInputWidth(58)
+            .WithInputWidth(52)
             .WithMargin(1, 0, 1, 0)
             .Build();
         passwordPrompt = Controls
             .Prompt("Password: ")
             .WithMaskCharacter('*')
-            .WithInputWidth(58)
+            .WithInputWidth(52)
             .WithMargin(1, 0, 1, 0)
             .Build();
 
@@ -226,9 +226,6 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
             Controls
                 .Markup()
                 .AddLine("[grey70]Test/Create/Cancel are buttons. Esc closes the dialog.[/]")
-                .AddLine(
-                    "[grey50]SQLite uses a file path. PostgreSQL and SQL Server can use Server fields or a direct connection string.[/]"
-                )
                 .StickyBottom()
                 .WithMargin(1, 0, 1, 0)
                 .Build()
@@ -287,7 +284,7 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         if (connectionStringPrompt is not null)
         {
             connectionStringPrompt.Prompt = ConnectionInputMapper.GetInputLabel(selectedType);
-            connectionStringPrompt.InputWidth = isSqlite ? 58 : 48;
+            connectionStringPrompt.InputWidth = isSqlite ? 52 : 42;
             connectionStringPrompt.Visible = isConnectionString;
             if (resetValues)
             {

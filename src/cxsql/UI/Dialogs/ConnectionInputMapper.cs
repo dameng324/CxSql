@@ -1,3 +1,4 @@
+using System.Data.Common;
 using CxSql.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
@@ -15,6 +16,8 @@ public sealed record ServerConnectionFields(
 
 public static class ConnectionInputMapper
 {
+    private const string SecretMask = "******";
+
     public static int GetDefaultPort(DatabaseType databaseType)
     {
         return databaseType switch
@@ -93,6 +96,23 @@ public static class ConnectionInputMapper
         }.ToString();
     }
 
+    public static string ToSafeConnectionString(DatabaseType databaseType, string connectionString)
+    {
+        try
+        {
+            return databaseType switch
+            {
+                DatabaseType.PostgreSql => MaskPostgreSqlPassword(connectionString),
+                DatabaseType.SqlServer => MaskSqlServerPassword(connectionString),
+                _ => MaskGenericPassword(connectionString),
+            };
+        }
+        catch (ArgumentException)
+        {
+            return MaskGenericPassword(connectionString);
+        }
+    }
+
     public static string ToServerConnectionString(
         DatabaseType databaseType,
         ServerConnectionFields fields
@@ -126,6 +146,17 @@ public static class ConnectionInputMapper
         return builder.ToString();
     }
 
+    private static string MaskPostgreSqlPassword(string connectionString)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        if (HasSecret(builder, "Password"))
+        {
+            builder.Password = SecretMask;
+        }
+
+        return builder.ToString();
+    }
+
     private static string BuildSqlServerConnectionString(ServerConnectionFields fields)
     {
         var dataSource =
@@ -147,5 +178,39 @@ public static class ConnectionInputMapper
         }
 
         return builder.ToString();
+    }
+
+    private static string MaskSqlServerPassword(string connectionString)
+    {
+        var builder = new SqlConnectionStringBuilder(connectionString);
+        if (HasSecret(builder, "Password") || HasSecret(builder, "Pwd"))
+        {
+            builder.Password = SecretMask;
+        }
+
+        return builder.ToString();
+    }
+
+    private static string MaskGenericPassword(string connectionString)
+    {
+        var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
+        foreach (var key in builder.Keys.Cast<string>().Where(IsSecretKey).ToList())
+        {
+            builder[key] = SecretMask;
+        }
+
+        return builder.ConnectionString;
+    }
+
+    private static bool HasSecret(DbConnectionStringBuilder builder, string key)
+    {
+        return builder.TryGetValue(key, out var value)
+            && !string.IsNullOrWhiteSpace(value?.ToString());
+    }
+
+    private static bool IsSecretKey(string key)
+    {
+        return key.Equals("Password", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("Pwd", StringComparison.OrdinalIgnoreCase);
     }
 }

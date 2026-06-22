@@ -117,4 +117,47 @@ public sealed class ConnectionInputMapperTests
             );
         }
     }
+
+    [Test]
+    public void SafePostgreSqlConnectionStringMasksPassword()
+    {
+        const string connectionString = "Host=localhost;Database=app;Username=app;Password=secret;";
+
+        var safeValue = ConnectionInputMapper.ToSafeConnectionString(
+            DatabaseType.PostgreSql,
+            connectionString
+        );
+
+        if (
+            safeValue.Contains("secret", StringComparison.OrdinalIgnoreCase)
+            || !safeValue.Contains("******", StringComparison.Ordinal)
+        )
+        {
+            throw new InvalidOperationException(
+                $"Expected PostgreSQL password to be masked, got {safeValue}."
+            );
+        }
+    }
+
+    [Test]
+    public void SafeSqlServerConnectionStringMasksPassword()
+    {
+        const string connectionString =
+            "Server=localhost;Database=app;User ID=sa;Password=secret;TrustServerCertificate=True;";
+
+        var safeValue = ConnectionInputMapper.ToSafeConnectionString(
+            DatabaseType.SqlServer,
+            connectionString
+        );
+
+        if (
+            safeValue.Contains("secret", StringComparison.OrdinalIgnoreCase)
+            || !safeValue.Contains("******", StringComparison.Ordinal)
+        )
+        {
+            throw new InvalidOperationException(
+                $"Expected SQL Server password to be masked, got {safeValue}."
+            );
+        }
+    }
 }

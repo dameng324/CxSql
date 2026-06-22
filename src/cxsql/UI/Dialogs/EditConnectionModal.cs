@@ -52,7 +52,7 @@ public sealed class EditConnectionModal : ModalBase<NewConnectionRequest?>
 
     protected override int GetWidth()
     {
-        return 88;
+        return 76;
     }
 
     protected override int GetHeight()
@@ -80,7 +80,7 @@ public sealed class EditConnectionModal : ModalBase<NewConnectionRequest?>
         namePrompt = Controls
             .Prompt("Name: ")
             .WithInput(connection.Name)
-            .WithInputWidth(66)
+            .WithInputWidth(54)
             .WithMargin(1, 1, 1, 0)
             .Build();
 
@@ -89,7 +89,7 @@ public sealed class EditConnectionModal : ModalBase<NewConnectionRequest?>
             .WithInput(
                 ConnectionInputMapper.ToDisplayValue(databaseType, connection.ConnectionString)
             )
-            .WithInputWidth(databaseType == DatabaseType.Sqlite ? 58 : 48)
+            .WithInputWidth(databaseType == DatabaseType.Sqlite ? 52 : 42)
             .WithMargin(1, 0, 1, 0)
             .Build();
 

@@ -44,7 +44,9 @@ public sealed class SharpConsoleSqlClient(
     private ConsoleWindowSystem windowSystem = null!;
     private Window mainWindow = null!;
     private StatusBarControl headerBar = null!;
+    private ToolbarControl connectionToolbar = null!;
     private ToolbarControl queryToolbar = null!;
+    private ToolbarControl resultToolbar = null!;
     private TabControl editorTabs = null!;
     private TabControl bottomTabs = null!;
     private TableControl resultTable = null!;
@@ -96,6 +98,7 @@ public sealed class SharpConsoleSqlClient(
     private void BuildUi()
     {
         headerBar = BuildHeaderBar();
+        connectionToolbar = BuildConnectionToolbar();
         queryToolbar = BuildQueryToolbar();
         var topRule = Controls.RuleBuilder().StickyTop().WithColor(Color.Grey27).Build();
         var bottomRule = Controls.RuleBuilder().StickyBottom().WithColor(Color.Grey27).Build();
@@ -164,6 +167,7 @@ public sealed class SharpConsoleSqlClient(
         resultTable.TruncationFade = true;
         resultTable.ClearSelectionOnEmptyClick = true;
         resultTable.MouseRightClick += (_, args) => ShowResultGridContext(args);
+        resultToolbar = BuildResultToolbar();
 
         messagesPanel = Controls
             .Markup()
@@ -197,7 +201,19 @@ public sealed class SharpConsoleSqlClient(
                 column.Add(queryToolbar);
                 column.Add(editorTabs);
                 column.Add(Controls.HorizontalSplitter().WithMinHeights(8, 6).Build());
+                column.Add(resultToolbar);
                 column.Add(bottomTabs);
+            })
+            .Build();
+
+        var objectExplorerStack = Controls
+            .HorizontalGrid()
+            .WithAlignment(HorizontalAlignment.Stretch)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .Column(column =>
+            {
+                column.Add(connectionToolbar);
+                column.Add(objectExplorer.Control);
             })
             .Build();
 
@@ -205,7 +221,7 @@ public sealed class SharpConsoleSqlClient(
             .HorizontalGrid()
             .WithAlignment(HorizontalAlignment.Stretch)
             .WithVerticalAlignment(VerticalAlignment.Fill)
-            .Column(column => column.Width(34).Add(objectExplorer.Control))
+            .Column(column => column.Width(34).Add(objectExplorerStack))
             .Column(column => column.Flex(1).Add(editorStack))
             .WithSplitterAfter(0)
             .Build();
@@ -262,6 +278,23 @@ public sealed class SharpConsoleSqlClient(
             .Build();
     }
 
+    private ToolbarControl BuildConnectionToolbar()
+    {
+        var builder = Controls
+            .Toolbar()
+            .WithSpacing(1)
+            .WithWrap()
+            .WithMargin(1, 0, 1, 0)
+            .WithBackgroundColor(Color.Transparent)
+            .WithBelowLineColor(Color.Grey27);
+
+        AddToolbarButton(builder, "New", () => _ = NewConnectionAsync());
+        AddToolbarButton(builder, "Open", () => _ = SelectConnectionAsync());
+        AddToolbarButton(builder, "Refresh", () => _ = RefreshObjectsAsync());
+
+        return builder.Build();
+    }
+
     private ToolbarControl BuildQueryToolbar()
     {
         var builder = Controls
@@ -276,6 +309,23 @@ public sealed class SharpConsoleSqlClient(
         AddToolbarButton(builder, "Stop", StopExecution);
         AddToolbarButton(builder, "Save SQL [grey50]Ctrl+S[/]", () => _ = SaveSqlAsync());
         AddToolbarButton(builder, "History", () => _ = ShowHistoryAsync());
+
+        return builder.Build();
+    }
+
+    private ToolbarControl BuildResultToolbar()
+    {
+        var builder = Controls
+            .Toolbar()
+            .WithSpacing(1)
+            .WithWrap()
+            .WithMargin(1, 0, 1, 0)
+            .WithBackgroundColor(Color.Transparent)
+            .WithBelowLineColor(Color.Grey27);
+
+        AddToolbarButton(builder, "Export CSV", () => _ = ExportCsvAsync());
+        AddToolbarButton(builder, "Copy All", CopyAllResults);
+        AddToolbarButton(builder, "Clear Filter", ClearResultFilter);
 
         return builder.Build();
     }
@@ -536,7 +586,18 @@ public sealed class SharpConsoleSqlClient(
         }
 
         var editor = ActiveEditor;
-        if (editor is null || string.IsNullOrWhiteSpace(editor.Content))
+        if (editor is null)
+        {
+            ShowNotification(
+                "Execute",
+                "Select a SQL editor tab before executing SQL.",
+                NotificationSeverity.Warning
+            );
+            UpdateStatus("Select a SQL editor tab before executing SQL.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(editor.Content))
         {
             ShowNotification(
                 "Execute",
@@ -556,10 +617,16 @@ public sealed class SharpConsoleSqlClient(
                 editor.Content,
                 executionCts.Token
             );
-            resultDataSource.SetResult(lastResult.Success ? lastResult : null);
-            if (lastResult.Success)
+            var displayResult =
+                lastResult.Success && lastResult.Columns.Count > 0 ? lastResult : null;
+            resultDataSource.SetResult(displayResult);
+            if (displayResult is not null)
             {
                 bottomTabs.ActiveTabIndex = ResultGridTabIndex;
+            }
+            else if (lastResult.Success)
+            {
+                bottomTabs.ActiveTabIndex = MessagesTabIndex;
             }
 
             RecordQueryResultMessages(lastResult);
@@ -592,6 +659,12 @@ public sealed class SharpConsoleSqlClient(
         var editor = ActiveEditor;
         if (editor is null)
         {
+            ShowNotification(
+                "Save SQL",
+                "Select a SQL editor tab before saving SQL.",
+                NotificationSeverity.Warning
+            );
+            UpdateStatus("Select a SQL editor tab before saving SQL.");
             return;
         }
 
@@ -627,7 +700,8 @@ public sealed class SharpConsoleSqlClient(
 
     private async Task ExportCsvAsync()
     {
-        if (lastResult is null || lastResult.Columns.Count == 0)
+        var exportResult = resultDataSource.ToVisibleResult();
+        if (exportResult is null || exportResult.Columns.Count == 0)
         {
             ShowNotification(
                 "Export",
@@ -651,9 +725,9 @@ public sealed class SharpConsoleSqlClient(
 
         try
         {
-            await csvExportService.ExportAsync(lastResult, path, CancellationToken.None);
+            await csvExportService.ExportAsync(exportResult, path, CancellationToken.None);
             ShowNotification("Export", $"Exported to {path}.", NotificationSeverity.Success);
-            UpdateStatus($"Exported result grid to {path}.");
+            UpdateStatus($"Exported visible result grid to {path}.");
         }
         catch (Exception ex)
         {
@@ -678,7 +752,7 @@ public sealed class SharpConsoleSqlClient(
                 SqlContextMenuItem.Create("New Query", () => CreateQueryTab(isInitial: false)),
                 new SqlContextMenuItem("History", null, ShowHistoryAsync),
                 SqlContextMenuItem.Separator(),
-                new SqlContextMenuItem("Refresh Active Connection", "F5", RefreshObjectsAsync),
+                new SqlContextMenuItem("Refresh Active Connection", null, RefreshObjectsAsync),
                 SqlContextMenuItem.Separator(),
                 SqlContextMenuItem.Create("Exit", ExitApplication, "Ctrl+Q"),
             ],
@@ -721,10 +795,10 @@ public sealed class SharpConsoleSqlClient(
                 ),
                 SqlContextMenuItem.Create("Close Connection", () => CloseConnection(connection)),
                 SqlContextMenuItem.Separator(),
-                new SqlContextMenuItem("Refresh Objects", "F5", RefreshObjectsAsync),
+                new SqlContextMenuItem("Refresh Objects", null, RefreshObjectsAsync),
                 SqlContextMenuItem.Create(
-                    "Copy Connection String",
-                    () => CopyToClipboard(connection.ConnectionString)
+                    "Copy Safe Connection String",
+                    () => CopySafeConnectionString(connection)
                 ),
             ],
             owner.ActualX + args.Position.X,
@@ -791,7 +865,7 @@ public sealed class SharpConsoleSqlClient(
                     () => CopyToClipboard(databaseObject.DisplayName)
                 ),
                 SqlContextMenuItem.Separator(),
-                new SqlContextMenuItem("Refresh Objects", "F5", RefreshObjectsAsync),
+                new SqlContextMenuItem("Refresh Objects", null, RefreshObjectsAsync),
             ],
             owner.ActualX + args.Position.X,
             owner.ActualY + args.Position.Y,
@@ -804,20 +878,13 @@ public sealed class SharpConsoleSqlClient(
         contextMenuController.Show(
             [
                 new SqlContextMenuItem("Export CSV", null, ExportCsvAsync),
-                new SqlContextMenuItem("Refresh Query", "F5", ExecuteCurrentSqlAsync),
+                new SqlContextMenuItem("Execute Current SQL", "F5", ExecuteCurrentSqlAsync),
                 SqlContextMenuItem.Separator(),
                 SqlContextMenuItem.Create("Copy Cell", CopySelectedCell),
                 SqlContextMenuItem.Create("Copy Row", CopySelectedRow),
                 SqlContextMenuItem.Create("Copy All", CopyAllResults),
                 SqlContextMenuItem.Separator(),
-                SqlContextMenuItem.Create(
-                    "Clear Filter",
-                    () =>
-                    {
-                        resultDataSource.ClearFilter();
-                        UpdateStatus("ResultGrid filter cleared.");
-                    }
-                ),
+                SqlContextMenuItem.Create("Clear Filter", ClearResultFilter),
             ],
             resultTable.ActualX + args.Position.X,
             resultTable.ActualY + args.Position.Y,
@@ -1470,6 +1537,16 @@ public sealed class SharpConsoleSqlClient(
 
     private void CopySelectedCell()
     {
+        if (resultDataSource.QueryResult is null || resultTable.SelectedRowIndex < 0)
+        {
+            ShowNotification(
+                "Copy Cell",
+                "Select a result cell before copying.",
+                NotificationSeverity.Warning
+            );
+            return;
+        }
+
         var value = resultDataSource.GetPlainCellValue(
             resultTable.SelectedRowIndex,
             resultTable.SelectedColumnIndex
@@ -1479,19 +1556,54 @@ public sealed class SharpConsoleSqlClient(
 
     private void CopySelectedRow()
     {
+        if (resultDataSource.QueryResult is null || resultTable.SelectedRowIndex < 0)
+        {
+            ShowNotification(
+                "Copy Row",
+                "Select a result row before copying.",
+                NotificationSeverity.Warning
+            );
+            return;
+        }
+
         var values = resultDataSource.GetPlainRowValues(resultTable.SelectedRowIndex);
         CopyToClipboard(string.Join('\t', values));
     }
 
     private void CopyAllResults()
     {
+        if (resultDataSource.QueryResult is null || resultDataSource.ColumnCount == 0)
+        {
+            ShowNotification(
+                "Copy All",
+                "Run a query that returns rows first.",
+                NotificationSeverity.Warning
+            );
+            return;
+        }
+
         CopyToClipboard(resultDataSource.ToTabDelimitedText());
     }
 
-    private void CopyToClipboard(string value)
+    private void CopySafeConnectionString(DatabaseConnection connection)
+    {
+        var value = ConnectionInputMapper.ToSafeConnectionString(
+            connection.DatabaseType,
+            connection.ConnectionString
+        );
+        CopyToClipboard(value, "Copied connection string with password redacted.");
+    }
+
+    private void CopyToClipboard(string value, string statusMessage = "Copied to clipboard.")
     {
         ClipboardHelper.SetText(value);
-        UpdateStatus("Copied to clipboard.");
+        UpdateStatus(statusMessage);
+    }
+
+    private void ClearResultFilter()
+    {
+        resultDataSource.ClearFilter();
+        UpdateStatus("ResultGrid filter cleared.");
     }
 
     private void OnEditorContentChanged(MultilineEditControl editor, string content)

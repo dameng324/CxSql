@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Globalization;
 using CxSql.Models;
 using SharpConsoleUI;
 using SharpConsoleUI.Controls;
@@ -12,7 +13,7 @@ public sealed class QueryResultDataSource : ITableDataSource
     private static readonly Color OddRowBackground = new(18, 22, 35);
     private QueryResult? queryResult;
     private List<QueryRow> rows = [];
-    private int sortColumn;
+    private int? sortColumn;
     private SortDirection sortDirection = SortDirection.Ascending;
     private string? filterText;
 
@@ -29,10 +30,30 @@ public sealed class QueryResultDataSource : ITableDataSource
     public void SetResult(QueryResult? result)
     {
         queryResult = result;
-        sortColumn = 0;
+        sortColumn = null;
         sortDirection = SortDirection.Ascending;
         filterText = null;
         RebuildRows();
+    }
+
+    public QueryResult? ToVisibleResult()
+    {
+        if (queryResult is null)
+        {
+            return null;
+        }
+
+        return new QueryResult
+        {
+            Columns = queryResult.Columns.ToList(),
+            Rows = rows.Select(row => new QueryRow { Values = row.Values.ToList() }).ToList(),
+            Messages = queryResult.Messages.ToList(),
+            ElapsedMilliseconds = queryResult.ElapsedMilliseconds,
+            AffectedRows = queryResult.AffectedRows,
+            Success = queryResult.Success,
+            ErrorMessage = queryResult.ErrorMessage,
+            ProviderErrorCode = queryResult.ProviderErrorCode,
+        };
     }
 
     public string GetColumnHeader(int col)
@@ -183,12 +204,16 @@ public sealed class QueryResultDataSource : ITableDataSource
             );
         }
 
-        if (queryResult is not null && CanSort(sortColumn))
+        if (queryResult is not null && sortColumn is { } column && CanSort(column))
         {
             nextRows =
                 sortDirection == SortDirection.Descending
-                    ? nextRows.OrderByDescending(row => GetSortValue(row, sortColumn))
-                    : nextRows.OrderBy(row => GetSortValue(row, sortColumn));
+                    ? nextRows
+                        .OrderBy(row => IsNullSortValue(row, column))
+                        .ThenByDescending(row => GetSortValue(row, column))
+                    : nextRows
+                        .OrderBy(row => IsNullSortValue(row, column))
+                        .ThenBy(row => GetSortValue(row, column));
         }
 
         rows = nextRows.ToList();
@@ -198,10 +223,115 @@ public sealed class QueryResultDataSource : ITableDataSource
         );
     }
 
-    private static string GetSortValue(QueryRow row, int column)
+    private SortKey GetSortValue(QueryRow row, int column)
     {
-        return column >= 0 && column < row.Values.Count
-            ? row.Values[column] ?? string.Empty
-            : string.Empty;
+        if (column < 0 || column >= row.Values.Count)
+        {
+            return SortKey.Text(string.Empty);
+        }
+
+        var value = row.Values[column];
+        if (value is null)
+        {
+            return SortKey.Text(string.Empty);
+        }
+
+        var dataType =
+            queryResult is not null && column < queryResult.Columns.Count
+                ? queryResult.Columns[column].DataType
+                : string.Empty;
+        if (
+            IsNumericType(dataType)
+            && decimal.TryParse(
+                value,
+                NumberStyles.Any,
+                CultureInfo.InvariantCulture,
+                out var number
+            )
+        )
+        {
+            return SortKey.Number(number);
+        }
+
+        if (
+            IsTemporalType(dataType)
+            && DateTimeOffset.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal,
+                out var instant
+            )
+        )
+        {
+            return SortKey.Instant(instant.ToUnixTimeMilliseconds());
+        }
+
+        return SortKey.Text(value);
+    }
+
+    private static bool IsNullSortValue(QueryRow row, int column)
+    {
+        return column < 0 || column >= row.Values.Count || row.Values[column] is null;
+    }
+
+    private static bool IsNumericType(string dataType)
+    {
+        return dataType.Equals("Byte", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("SByte", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("Int16", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("UInt16", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("Int32", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("UInt32", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("Int64", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("UInt64", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("Single", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("Double", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTemporalType(string dataType)
+    {
+        return dataType.Equals("DateTime", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("DateTimeOffset", StringComparison.OrdinalIgnoreCase)
+            || dataType.Equals("DateOnly", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private readonly record struct SortKey(
+        int TypeRank,
+        decimal NumberValue,
+        long InstantValue,
+        string TextValue
+    ) : IComparable<SortKey>
+    {
+        public static SortKey Number(decimal value)
+        {
+            return new SortKey(0, value, 0, string.Empty);
+        }
+
+        public static SortKey Instant(long value)
+        {
+            return new SortKey(1, 0, value, string.Empty);
+        }
+
+        public static SortKey Text(string value)
+        {
+            return new SortKey(2, 0, 0, value);
+        }
+
+        public int CompareTo(SortKey other)
+        {
+            var typeCompare = TypeRank.CompareTo(other.TypeRank);
+            if (typeCompare != 0)
+            {
+                return typeCompare;
+            }
+
+            return TypeRank switch
+            {
+                0 => NumberValue.CompareTo(other.NumberValue),
+                1 => InstantValue.CompareTo(other.InstantValue),
+                _ => StringComparer.OrdinalIgnoreCase.Compare(TextValue, other.TextValue),
+            };
+        }
     }
 }
