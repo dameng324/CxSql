@@ -29,6 +29,7 @@ public sealed class SharpConsoleSqlClient(
 {
     private const int ResultGridTabIndex = 0;
     private const int MessagesTabIndex = 1;
+    private const int TableDetailsTabIndex = 2;
     private const int MaxMessageLines = 240;
     private const int MaxStatusLength = 180;
 
@@ -59,6 +60,10 @@ public sealed class SharpConsoleSqlClient(
     private IReadOnlyList<DatabaseObject> currentObjects = [];
     private DatabaseConnection? activeConnection;
     private QueryResult? lastResult;
+    private string? lastResultBaseSql;
+    private string? pendingResultBaseSql;
+    private ResultGridFilterRequest? activeResultFilter;
+    private ResultGridSortRequest? activeResultSort;
     private CancellationTokenSource? executionCts;
     private int queryNumber;
     private bool suppressCompletion;
@@ -113,8 +118,7 @@ public sealed class SharpConsoleSqlClient(
             ShowConnectionsContext(args);
         };
         objectExplorer.ObjectSelected += databaseObject => _ = LoadColumnsAsync(databaseObject);
-        objectExplorer.ObjectActivated += databaseObject =>
-            _ = OpenObjectDetailsAsync(databaseObject);
+        objectExplorer.ObjectActivated += databaseObject => _ = PreviewObjectAsync(databaseObject);
         objectExplorer.ObjectRightClicked += (databaseObject, args) =>
         {
             ShowObjectContext(databaseObject, args);
@@ -168,6 +172,16 @@ public sealed class SharpConsoleSqlClient(
         resultTable.ClearSelectionOnEmptyClick = true;
         resultTable.MouseRightClick += (_, args) => ShowResultGridContext(args);
         resultToolbar = BuildResultToolbar();
+        var resultGridStack = Controls
+            .HorizontalGrid()
+            .WithAlignment(HorizontalAlignment.Stretch)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .Column(column =>
+            {
+                column.Add(resultToolbar);
+                column.Add(resultTable);
+            })
+            .Build();
 
         messagesPanel = Controls
             .Markup()
@@ -179,8 +193,9 @@ public sealed class SharpConsoleSqlClient(
 
         bottomTabs = new TabControlBuilder()
             .WithHeaderStyle(TabHeaderStyle.Classic)
-            .AddTab("ResultGrid", resultTable)
+            .AddTab("ResultGrid", resultGridStack)
             .AddTab("Messages", messagesPanel)
+            .AddTab("TableDetails", BuildEmptyTableDetailsControl())
             .Fill()
             .Build();
         bottomTabs.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -201,7 +216,6 @@ public sealed class SharpConsoleSqlClient(
                 column.Add(queryToolbar);
                 column.Add(editorTabs);
                 column.Add(Controls.HorizontalSplitter().WithMinHeights(8, 6).Build());
-                column.Add(resultToolbar);
                 column.Add(bottomTabs);
             })
             .Build();
@@ -328,6 +342,15 @@ public sealed class SharpConsoleSqlClient(
         AddToolbarButton(builder, "Clear Filter", ClearResultFilter);
 
         return builder.Build();
+    }
+
+    private static IWindowControl BuildEmptyTableDetailsControl()
+    {
+        return Controls
+            .Markup("[grey70]Right-click a table or view and choose Open Details.[/]")
+            .WithMargin(1)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .Build();
     }
 
     private static void AddToolbarButton(ToolbarBuilder builder, string label, Action action)
@@ -557,8 +580,16 @@ public sealed class SharpConsoleSqlClient(
             var previewSql = providerRegistry
                 .GetPreviewSqlBuilder(activeConnection.DatabaseType)
                 .BuildPreviewSql(databaseObject, 100);
-            ActiveEditor?.SetContent(previewSql);
-            await ExecuteCurrentSqlAsync();
+            pendingResultBaseSql = BuildSelectSql(databaseObject);
+            try
+            {
+                ActiveEditor?.SetContent(previewSql);
+                await ExecuteCurrentSqlAsync();
+            }
+            finally
+            {
+                pendingResultBaseSql = null;
+            }
         }
         catch (Exception ex)
         {
@@ -607,6 +638,7 @@ public sealed class SharpConsoleSqlClient(
             return;
         }
 
+        var resultBaseSql = pendingResultBaseSql ?? editor.Content;
         executionCts = new CancellationTokenSource();
         UpdateStatus("Executing SQL...");
 
@@ -622,10 +654,23 @@ public sealed class SharpConsoleSqlClient(
             resultDataSource.SetResult(displayResult);
             if (displayResult is not null)
             {
+                lastResultBaseSql = resultBaseSql;
+                activeResultFilter = null;
+                activeResultSort = null;
                 bottomTabs.ActiveTabIndex = ResultGridTabIndex;
             }
             else if (lastResult.Success)
             {
+                lastResultBaseSql = null;
+                activeResultFilter = null;
+                activeResultSort = null;
+                bottomTabs.ActiveTabIndex = MessagesTabIndex;
+            }
+            else
+            {
+                lastResultBaseSql = null;
+                activeResultFilter = null;
+                activeResultSort = null;
                 bottomTabs.ActiveTabIndex = MessagesTabIndex;
             }
 
@@ -638,6 +683,7 @@ public sealed class SharpConsoleSqlClient(
         }
         finally
         {
+            pendingResultBaseSql = null;
             executionCts?.Dispose();
             executionCts = null;
         }
@@ -875,6 +921,12 @@ public sealed class SharpConsoleSqlClient(
 
     private void ShowResultGridContext(SharpConsoleUI.Events.MouseEventArgs args)
     {
+        if (TryGetResultHeaderColumn(args, out var headerColumn))
+        {
+            ShowResultHeaderContext(headerColumn, args);
+            return;
+        }
+
         contextMenuController.Show(
             [
                 new SqlContextMenuItem("Export CSV", null, ExportCsvAsync),
@@ -885,6 +937,37 @@ public sealed class SharpConsoleSqlClient(
                 SqlContextMenuItem.Create("Copy All", CopyAllResults),
                 SqlContextMenuItem.Separator(),
                 SqlContextMenuItem.Create("Clear Filter", ClearResultFilter),
+            ],
+            resultTable.ActualX + args.Position.X,
+            resultTable.ActualY + args.Position.Y,
+            resultTable
+        );
+    }
+
+    private void ShowResultHeaderContext(int columnIndex, SharpConsoleUI.Events.MouseEventArgs args)
+    {
+        var columnName = resultDataSource.GetColumnHeader(columnIndex);
+        contextMenuController.Show(
+            [
+                SqlContextMenuItem.Create(
+                    $"Sort Asc: {columnName}",
+                    () => SortResultGridColumn(columnIndex, SortDirection.Ascending)
+                ),
+                SqlContextMenuItem.Create(
+                    $"Sort Desc: {columnName}",
+                    () => SortResultGridColumn(columnIndex, SortDirection.Descending)
+                ),
+                SqlContextMenuItem.Create("Clear Sort", ClearResultSort),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem(
+                    $"Filter: {columnName}",
+                    null,
+                    () => FilterResultGridColumnAsync(columnIndex)
+                ),
+                SqlContextMenuItem.Create("Clear Filter", ClearResultFilter),
+                SqlContextMenuItem.Separator(),
+                new SqlContextMenuItem("Export CSV", null, ExportCsvAsync),
+                SqlContextMenuItem.Create("Copy All", CopyAllResults),
             ],
             resultTable.ActualX + args.Position.X,
             resultTable.ActualY + args.Position.Y,
@@ -936,15 +1019,6 @@ public sealed class SharpConsoleSqlClient(
             return;
         }
 
-        var tabTitle = GetObjectDetailsTabTitle(activeConnection, databaseObject);
-        var existingTabIndex = FindEditorTabIndex(tabTitle);
-        if (existingTabIndex >= 0)
-        {
-            editorTabs.ActiveTabIndex = existingTabIndex;
-            UpdateStatus($"Activated existing details tab for {databaseObject.DisplayName}.");
-            return;
-        }
-
         try
         {
             var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
@@ -958,23 +1032,9 @@ public sealed class SharpConsoleSqlClient(
             );
             knownColumnsByObject[GetObjectKey(databaseObject)] = details.Columns;
 
-            QueryResult? previewResult = null;
-            if (databaseObject.ObjectType is DatabaseObjectType.Table or DatabaseObjectType.View)
-            {
-                var previewSql = providerRegistry
-                    .GetPreviewSqlBuilder(activeConnection.DatabaseType)
-                    .BuildPreviewSql(databaseObject, 100);
-                previewResult = await provider.ExecuteSqlAsync(
-                    connection,
-                    previewSql,
-                    CancellationToken.None
-                );
-            }
-
-            var control = BuildObjectDetailsControl(details, previewResult);
-            editorTabs.AddTab(tabTitle, control, isClosable: true);
-            editorTabs.ActiveTabIndex = editorTabs.TabCount - 1;
-            UpdateStatus($"Opened details for {databaseObject.DisplayName}.");
+            bottomTabs.SetTabContent(TableDetailsTabIndex, BuildObjectDetailsControl(details));
+            bottomTabs.ActiveTabIndex = TableDetailsTabIndex;
+            UpdateStatus($"Loaded TableDetails for {databaseObject.DisplayName}.");
         }
         catch (Exception ex)
         {
@@ -1259,7 +1319,7 @@ public sealed class SharpConsoleSqlClient(
         ShowNotification("SQL failed", TruncateStatus(details), NotificationSeverity.Danger);
     }
 
-    private void SetEditorContent(string sql)
+    private void SetEditorContent(string sql, string statusMessage = "SQL template inserted.")
     {
         var editor = ActiveEditor;
         if (editor is null)
@@ -1270,17 +1330,13 @@ public sealed class SharpConsoleSqlClient(
 
         editor?.SetContent(sql);
         editor?.RequestFocus();
-        UpdateStatus("SQL template inserted.");
+        UpdateStatus(statusMessage);
     }
 
-    private IWindowControl BuildObjectDetailsControl(
-        DatabaseObjectDetails details,
-        QueryResult? previewResult
-    )
+    private IWindowControl BuildObjectDetailsControl(DatabaseObjectDetails details)
     {
         var tabs = new TabControlBuilder()
             .WithHeaderStyle(TabHeaderStyle.Classic)
-            .AddTab("Data", BuildDataTab(previewResult))
             .AddTab(
                 "Structure",
                 BuildStringTable(
@@ -1352,7 +1408,24 @@ public sealed class SharpConsoleSqlClient(
         tabs.HorizontalAlignment = HorizontalAlignment.Stretch;
         tabs.VerticalAlignment = VerticalAlignment.Fill;
         tabs.BackgroundColor = Color.Transparent;
-        return tabs;
+
+        return Controls
+            .HorizontalGrid()
+            .WithAlignment(HorizontalAlignment.Stretch)
+            .WithVerticalAlignment(VerticalAlignment.Fill)
+            .Column(column =>
+            {
+                column.Add(
+                    Controls
+                        .Markup(
+                            $"[bold cyan]{MarkupParser.Escape(details.DatabaseObject.DisplayName)}[/] [grey50]{details.DatabaseObject.ObjectType}[/]"
+                        )
+                        .WithMargin(1, 0, 1, 0)
+                        .Build()
+                );
+                column.Add(tabs);
+            })
+            .Build();
     }
 
     private static TableControl BuildStringTable(
@@ -1603,7 +1676,127 @@ public sealed class SharpConsoleSqlClient(
     private void ClearResultFilter()
     {
         resultDataSource.ClearFilter();
-        UpdateStatus("ResultGrid filter cleared.");
+        activeResultFilter = null;
+        UpdateEditorFromResultGridState("ResultGrid filter cleared.");
+    }
+
+    private void SortResultGridColumn(int columnIndex, SortDirection direction)
+    {
+        if (resultDataSource.QueryResult is null || !resultDataSource.CanSort(columnIndex))
+        {
+            ShowNotification(
+                "ResultGrid",
+                "Run a query that returns columns before sorting.",
+                NotificationSeverity.Warning
+            );
+            return;
+        }
+
+        resultDataSource.Sort(columnIndex, direction);
+        resultTable.SelectedColumnIndex = columnIndex;
+        activeResultSort = new ResultGridSortRequest(
+            resultDataSource.GetColumnHeader(columnIndex),
+            direction
+        );
+        UpdateEditorFromResultGridState($"ResultGrid sorted by {activeResultSort.ColumnName}.");
+    }
+
+    private void ClearResultSort()
+    {
+        resultTable.ClearSort();
+        resultDataSource.ClearSort();
+        activeResultSort = null;
+        UpdateEditorFromResultGridState("ResultGrid sort cleared.");
+    }
+
+    private async Task FilterResultGridColumnAsync(int columnIndex)
+    {
+        if (
+            resultDataSource.QueryResult is null
+            || columnIndex < 0
+            || columnIndex >= resultDataSource.ColumnCount
+        )
+        {
+            ShowNotification(
+                "ResultGrid",
+                "Run a query that returns columns before filtering.",
+                NotificationSeverity.Warning
+            );
+            return;
+        }
+
+        var columnName = resultDataSource.GetColumnHeader(columnIndex);
+        var request = await ResultGridFilterDialog.ShowAsync(windowSystem, mainWindow, columnName);
+        if (request is null)
+        {
+            return;
+        }
+
+        resultDataSource.ApplyColumnFilter(columnIndex, request.Operator, request.Value);
+        resultTable.SelectedColumnIndex = columnIndex;
+        activeResultFilter = request;
+        bottomTabs.ActiveTabIndex = ResultGridTabIndex;
+        UpdateEditorFromResultGridState($"ResultGrid filter applied to {columnName}.");
+    }
+
+    private void UpdateEditorFromResultGridState(string statusMessage)
+    {
+        if (activeConnection is null || string.IsNullOrWhiteSpace(lastResultBaseSql))
+        {
+            UpdateStatus(statusMessage);
+            return;
+        }
+
+        try
+        {
+            SetEditorContent(
+                ResultGridSqlBuilder.Build(
+                    activeConnection.DatabaseType,
+                    lastResultBaseSql,
+                    activeResultFilter,
+                    activeResultSort
+                ),
+                statusMessage
+            );
+        }
+        catch (Exception ex)
+        {
+            ShowError("Build ResultGrid SQL failed", ex);
+        }
+    }
+
+    private bool TryGetResultHeaderColumn(
+        SharpConsoleUI.Events.MouseEventArgs args,
+        out int columnIndex
+    )
+    {
+        columnIndex = -1;
+        if (
+            args.Position.Y != 0
+            || resultDataSource.QueryResult is null
+            || resultDataSource.ColumnCount == 0
+        )
+        {
+            return false;
+        }
+
+        var x = args.Position.X + resultTable.HorizontalScrollOffset;
+        var currentX = 0;
+        for (var index = 0; index < resultDataSource.ColumnCount; index++)
+        {
+            var width =
+                resultDataSource.GetColumnWidth(index)
+                ?? Math.Max(8, resultDataSource.GetColumnHeader(index).Length + 2);
+            if (x >= currentX && x < currentX + width)
+            {
+                columnIndex = index;
+                return true;
+            }
+
+            currentX += width + (resultTable.ColumnSeparator.HasValue ? 1 : 0);
+        }
+
+        return false;
     }
 
     private void OnEditorContentChanged(MultilineEditControl editor, string content)

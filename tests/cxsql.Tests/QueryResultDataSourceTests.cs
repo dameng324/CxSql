@@ -58,6 +58,28 @@ public sealed class QueryResultDataSourceTests
         }
     }
 
+    [Test]
+    public void ColumnFilterUsesSelectedOperatorAndColumn()
+    {
+        var dataSource = new QueryResultDataSource();
+        dataSource.SetResult(BuildSingleColumnResult("amount", ["10", "2", "1"], "Int32"));
+
+        dataSource.ApplyColumnFilter(0, ResultGridFilterOperator.GreaterThan, "1");
+
+        var visible = dataSource.ToVisibleResult();
+        if (
+            visible is null
+            || visible.Rows.Count != 2
+            || visible.Rows[0].Values[0] != "10"
+            || visible.Rows[1].Values[0] != "2"
+        )
+        {
+            throw new InvalidOperationException(
+                "Column filter should apply the selected comparison operator to the selected column."
+            );
+        }
+    }
+
     private static QueryResult BuildSingleColumnResult(
         string columnName,
         IEnumerable<string> values,

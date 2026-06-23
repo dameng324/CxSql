@@ -1,9 +1,9 @@
 name: Publish
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -59,7 +59,7 @@ jobs:
         run: |
           $version = "${{ inputs.version }}"
           if ([string]::IsNullOrWhiteSpace($version)) {
-            $version = "${{ github.event.release.tag_name }}"
+            $version = "${{ github.ref_name }}"
           }
           $version = $version.TrimStart("v")
           "value=$version" >> $env:GITHUB_OUTPUT
@@ -100,7 +100,7 @@ jobs:
         run: |
           $version = "${{ inputs.version }}"
           if ([string]::IsNullOrWhiteSpace($version)) {
-            $version = "${{ github.event.release.tag_name }}"
+            $version = "${{ github.ref_name }}"
           }
           $version = $version.TrimStart("v")
           "value=$version" >> $env:GITHUB_OUTPUT
@@ -153,10 +153,10 @@ jobs:
     name: Publish to nuget.org
     needs: collect-all-packages
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || inputs.publish_to_nuget
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_to_nuget)
     permissions:
       contents: read
-      id-token: write    
+      id-token: write
 
     steps:
       - name: Checkout

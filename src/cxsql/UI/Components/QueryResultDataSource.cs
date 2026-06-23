@@ -16,6 +16,7 @@ public sealed class QueryResultDataSource : ITableDataSource
     private int? sortColumn;
     private SortDirection sortDirection = SortDirection.Ascending;
     private string? filterText;
+    private ColumnFilter? columnFilter;
 
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
@@ -33,6 +34,7 @@ public sealed class QueryResultDataSource : ITableDataSource
         sortColumn = null;
         sortDirection = SortDirection.Ascending;
         filterText = null;
+        columnFilter = null;
         RebuildRows();
     }
 
@@ -181,13 +183,54 @@ public sealed class QueryResultDataSource : ITableDataSource
 
     public void ApplyFilter(string filterText, string? columnName, FilterOperator op)
     {
-        this.filterText = filterText;
+        if (
+            !string.IsNullOrWhiteSpace(columnName)
+            && TryGetColumnIndex(columnName, out var columnIndex)
+        )
+        {
+            columnFilter = new ColumnFilter(
+                columnIndex,
+                ToResultGridFilterOperator(op),
+                filterText
+            );
+            this.filterText = null;
+        }
+        else
+        {
+            this.filterText = filterText;
+            columnFilter = null;
+        }
+
+        RebuildRows();
+    }
+
+    public void ApplyColumnFilter(
+        int columnIndex,
+        ResultGridFilterOperator filterOperator,
+        string value
+    )
+    {
+        if (queryResult is null || columnIndex < 0 || columnIndex >= queryResult.Columns.Count)
+        {
+            return;
+        }
+
+        columnFilter = new ColumnFilter(columnIndex, filterOperator, value);
+        filterText = null;
         RebuildRows();
     }
 
     public void ClearFilter()
     {
         filterText = null;
+        columnFilter = null;
+        RebuildRows();
+    }
+
+    public void ClearSort()
+    {
+        sortColumn = null;
+        sortDirection = SortDirection.Ascending;
         RebuildRows();
     }
 
@@ -195,7 +238,11 @@ public sealed class QueryResultDataSource : ITableDataSource
     {
         IEnumerable<QueryRow> nextRows = queryResult?.Rows ?? [];
 
-        if (!string.IsNullOrWhiteSpace(filterText))
+        if (columnFilter is not null)
+        {
+            nextRows = nextRows.Where(row => MatchesColumnFilter(row, columnFilter));
+        }
+        else if (!string.IsNullOrWhiteSpace(filterText))
         {
             nextRows = nextRows.Where(row =>
                 row.Values.Any(value =>
@@ -221,6 +268,124 @@ public sealed class QueryResultDataSource : ITableDataSource
             this,
             new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset)
         );
+    }
+
+    private bool TryGetColumnIndex(string columnName, out int columnIndex)
+    {
+        columnIndex = -1;
+        if (queryResult is null)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < queryResult.Columns.Count; index++)
+        {
+            if (
+                string.Equals(
+                    queryResult.Columns[index].Name,
+                    columnName,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                columnIndex = index;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MatchesColumnFilter(QueryRow row, ColumnFilter filter)
+    {
+        if (filter.ColumnIndex < 0 || filter.ColumnIndex >= row.Values.Count)
+        {
+            return false;
+        }
+
+        var value = row.Values[filter.ColumnIndex];
+        if (value is null)
+        {
+            return false;
+        }
+
+        return filter.Operator switch
+        {
+            ResultGridFilterOperator.Equal => string.Equals(
+                value,
+                filter.Value,
+                StringComparison.OrdinalIgnoreCase
+            ),
+            ResultGridFilterOperator.Contains => value.Contains(
+                filter.Value,
+                StringComparison.OrdinalIgnoreCase
+            ),
+            ResultGridFilterOperator.GreaterThan => CompareFilterValues(value, filter) > 0,
+            ResultGridFilterOperator.LessThan => CompareFilterValues(value, filter) < 0,
+            ResultGridFilterOperator.GreaterThanOrEqual => CompareFilterValues(value, filter) >= 0,
+            ResultGridFilterOperator.LessThanOrEqual => CompareFilterValues(value, filter) <= 0,
+            _ => false,
+        };
+    }
+
+    private int CompareFilterValues(string value, ColumnFilter filter)
+    {
+        var dataType =
+            queryResult is not null && filter.ColumnIndex < queryResult.Columns.Count
+                ? queryResult.Columns[filter.ColumnIndex].DataType
+                : string.Empty;
+
+        if (
+            IsNumericType(dataType)
+            && decimal.TryParse(
+                value,
+                NumberStyles.Any,
+                CultureInfo.InvariantCulture,
+                out var leftNumber
+            )
+            && decimal.TryParse(
+                filter.Value,
+                NumberStyles.Any,
+                CultureInfo.InvariantCulture,
+                out var rightNumber
+            )
+        )
+        {
+            return leftNumber.CompareTo(rightNumber);
+        }
+
+        if (
+            IsTemporalType(dataType)
+            && DateTimeOffset.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal,
+                out var leftInstant
+            )
+            && DateTimeOffset.TryParse(
+                filter.Value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal,
+                out var rightInstant
+            )
+        )
+        {
+            return leftInstant
+                .ToUnixTimeMilliseconds()
+                .CompareTo(rightInstant.ToUnixTimeMilliseconds());
+        }
+
+        return StringComparer.OrdinalIgnoreCase.Compare(value, filter.Value);
+    }
+
+    private static ResultGridFilterOperator ToResultGridFilterOperator(FilterOperator op)
+    {
+        return op switch
+        {
+            FilterOperator.GreaterThan => ResultGridFilterOperator.GreaterThan,
+            FilterOperator.LessThan => ResultGridFilterOperator.LessThan,
+            _ => ResultGridFilterOperator.Contains,
+        };
     }
 
     private SortKey GetSortValue(QueryRow row, int column)
@@ -334,4 +499,10 @@ public sealed class QueryResultDataSource : ITableDataSource
             };
         }
     }
+
+    private sealed record ColumnFilter(
+        int ColumnIndex,
+        ResultGridFilterOperator Operator,
+        string Value
+    );
 }

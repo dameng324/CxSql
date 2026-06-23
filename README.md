@@ -1,47 +1,22 @@
 # cxsql
 
-cxsql is a cross-platform terminal SQL client. The product direction is a
-Navicat-like database management workflow adapted to a terminal TUI.
+cxsql is a mouse-first SQL terminal client for people who want a practical
+database workspace without leaving the terminal. It combines saved connections,
+an object explorer, SQL editor tabs, result grids, table metadata, query history,
+CSV export, and copy workflows in a cross-platform TUI.
 
-## Current MVP
+## Highlights
 
-- Manage local JSON database connections.
-- Open SQLite, PostgreSQL, and SQL Server connections.
-- Execute SQL through ADO.NET.
-- Display query results in a terminal grid.
-- Show SQL errors without crashing the app.
-- Export the latest result set to CSV.
-- Store query history locally.
-
-## UI
-
-cxsql now starts in a SharpConsoleUI window system:
-
-- Minimal top bar with the visible exit command.
-- Left connection and object tree with visible New, Open, and Refresh actions plus
-  mouse context menus.
-- Center SQL editor tabs using `MultilineEditControl`.
-- Query toolbar with visible Execute, Stop, Save SQL, and History actions.
-- Bottom result area with visible Export CSV, Copy All, and Clear Filter actions,
-  plus tabs for result grid and messages.
-- Draggable splitters between the object tree, editor, and result area.
-- Mouse activation for toolbar buttons, connection rows, object tree nodes, and
-  result grid selection.
-- Query history includes search and SQL preview before loading an entry.
-
-## UX Rules
-
-- Mouse-first, keyboard-shortcuts-second.
-- No implicit shortcuts.
-- Common shortcuts must be visible next to their toolbar buttons.
-- Current allowed shortcuts:
-  - `F5`: Execute current SQL
-  - `Ctrl+S`: Save SQL
-  - `Ctrl+Q`: Exit
-  - `Esc`: Close dialog
-
-The terminal fallback is only kept for non-interactive environments and legacy
-diagnostics; the normal app path uses SharpConsoleUI controls directly.
+- Connect to SQLite, PostgreSQL, and SQL Server.
+- Save connection profiles locally as JSON.
+- Browse database objects in a left-side explorer.
+- Double-click tables and views to preview data.
+- Open table details for structure, constraints, indexes, triggers, and DDL.
+- Run SQL in tabbed editors with syntax highlighting and completion.
+- Work with results in a sortable, filterable grid.
+- Generate SQL from result-grid column sort and filter actions.
+- Export visible result data to CSV or copy it as tab-delimited text.
+- Review and reload previous queries from local history.
 
 ## Install
 
@@ -49,6 +24,18 @@ diagnostics; the normal app path uses SharpConsoleUI controls directly.
 dotnet tool install --global cxsql
 cxsql
 ```
+
+## Use
+
+Start `cxsql`, create or open a connection, then use the object tree and editor
+together:
+
+- Double-click a saved connection to open it.
+- Double-click a table or view to run a preview query.
+- Right-click a table or view and choose `Open Details` to inspect metadata.
+- Right-click a result-grid header to sort or build a SQL filter.
+- Use the `ResultGrid` actions to export CSV, copy all rows, or clear filters.
+- Use `F5` to execute the active SQL editor.
 
 ## Build
 
@@ -58,7 +45,7 @@ dotnet build cxsql.slnx
 dotnet test cxsql.slnx
 ```
 
-## Run
+## Run From Source
 
 ```powershell
 dotnet run --project src/cxsql/cxsql.csproj
@@ -73,13 +60,13 @@ dotnet tool run csharpier -- format .
 
 ## Publish
 
-The `Publish` GitHub Actions workflow builds Native AOT tool packages using the
-multi-RID pattern:
+The `Publish` GitHub Actions workflow runs from version tags and manual
+dispatches. It builds Native AOT dotnet-tool packages with the multi-RID
+package pattern:
 
 - platform-specific packages: `dotnet pack -p:ToolType=aot --use-current-runtime`
 - agnostic package: `dotnet pack -p:ToolType=aot`
-- collected artifacts: `all-aot-packages`
+- collected artifact: `all-aot-packages`
 
 Publishing to nuget.org uses OIDC through `NuGet/login@v1`. Configure NuGet
-trusted publishing for the repository and set the `NUGET_USER` repository
-variable to the nuget.org account name.
+trusted publishing for the repository and the `BigDream` nuget.org account.
