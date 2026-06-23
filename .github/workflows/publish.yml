@@ -74,7 +74,7 @@ jobs:
           --use-current-runtime
 
       - name: Upload platform-specific package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aot-package-${{ matrix.rid }}
           path: ${{ env.PACKAGE_OUTPUT }}/*.nupkg
@@ -114,7 +114,7 @@ jobs:
           -p:ToolType=aot
 
       - name: Upload agnostic package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aot-package-agnostic
           path: ${{ env.PACKAGE_OUTPUT }}/*.nupkg
@@ -142,7 +142,7 @@ jobs:
           echo "Package count: $(find collected-packages -name "*.nupkg" -type f | wc -l)"
 
       - name: Upload all packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: all-aot-packages
           path: collected-packages/**/*.nupkg
