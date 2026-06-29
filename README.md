@@ -37,6 +37,14 @@ together:
 - Use the `ResultGrid` actions to export CSV, copy all rows, or clear filters.
 - Use `F5` to execute the active SQL editor.
 
+## Logs
+
+cxsql keeps runtime diagnostics out of the interactive TUI. Warning and error
+logs are written under `~/.cxsql/logs` using a per-startup file name such as
+`cxsql-20260629-143015.log`.
+
+At startup, cxsql automatically deletes its own log files older than 30 days.
+
 ## Build
 
 ```powershell

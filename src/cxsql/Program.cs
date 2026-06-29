@@ -1,4 +1,5 @@
 using CxSql.Application.Services;
+using CxSql.Infrastructure.Logging;
 using CxSql.Infrastructure.Storage;
 using CxSql.UI.Screens;
 using Microsoft.Extensions.Logging;
@@ -15,19 +16,12 @@ public static class Program
             return 0;
         }
 
-        using var loggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder.SetMinimumLevel(LogLevel.Warning);
-            builder.AddSimpleConsole(options =>
-            {
-                options.SingleLine = true;
-                options.TimestampFormat = "HH:mm:ss ";
-            });
-        });
+        ILoggerFactory? loggerFactory = null;
 
         try
         {
             var appPaths = AppPaths.CreateDefault();
+            loggerFactory = CreateLoggerFactory(appPaths);
             var providerRegistry = DatabaseProviderRegistry.CreateDefault();
             var connectionManager = new ConnectionManager(
                 new JsonFileConnectionStore(appPaths.ConnectionsFile),
@@ -55,10 +49,31 @@ public static class Program
         }
         catch (Exception ex)
         {
-            loggerFactory.CreateLogger("cxsql").LogCritical(ex, "Unhandled application failure");
+            loggerFactory?.CreateLogger("cxsql").LogCritical(ex, "Unhandled application failure");
             Console.Error.WriteLine($"cxsql failed: {ex.Message}");
             return 1;
         }
+        finally
+        {
+            loggerFactory?.Dispose();
+        }
+    }
+
+    internal static ILoggerFactory CreateLoggerFactory(AppPaths appPaths) =>
+        CreateLoggerFactory(appPaths, DateTimeOffset.Now);
+
+    internal static ILoggerFactory CreateLoggerFactory(AppPaths appPaths, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(appPaths);
+
+        LogFileMaintenance.DeleteExpiredLogs(appPaths.LogsDirectory, now, TimeSpan.FromDays(30));
+        var logFilePath = LogFileMaintenance.CreateStartupLogFilePath(appPaths.LogsDirectory, now);
+
+        return LoggerFactory.Create(builder =>
+        {
+            builder.SetMinimumLevel(LogLevel.Warning);
+            builder.AddProvider(new FileLoggerProvider(logFilePath));
+        });
     }
 
     private static void PrintHelp()
