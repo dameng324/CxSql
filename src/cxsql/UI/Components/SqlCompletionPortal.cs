@@ -103,7 +103,7 @@ public sealed class SqlCompletionPortal : PortalContentBase
             list.SelectedIndex++;
         }
 
-        Invalidate();
+        Invalidate(Invalidation.Repaint);
     }
 
     public void SelectPrevious()
@@ -113,7 +113,7 @@ public sealed class SqlCompletionPortal : PortalContentBase
             list.SelectedIndex--;
         }
 
-        Invalidate();
+        Invalidate(Invalidation.Repaint);
     }
 
     public void SetFilter(string prefix)
@@ -133,7 +133,7 @@ public sealed class SqlCompletionPortal : PortalContentBase
             list.SelectedIndex = 0;
         }
 
-        Invalidate();
+        Invalidate(Invalidation.Repaint);
     }
 
     public override Rectangle GetPortalBounds()
@@ -165,7 +165,7 @@ public sealed class SqlCompletionPortal : PortalContentBase
             }
             else
             {
-                Invalidate();
+                Invalidate(Invalidation.Repaint);
             }
 
             return true;
@@ -254,7 +254,7 @@ public sealed class SqlCompletionController
             }
             else
             {
-                mainWindow.Invalidate(false, targetEditor);
+                mainWindow.Invalidate(Invalidation.Repaint, targetEditor);
             }
 
             return;
@@ -304,7 +304,7 @@ public sealed class SqlCompletionController
             if (key == ConsoleKey.UpArrow)
             {
                 portal.SelectPrevious();
-                mainWindow.Invalidate(false, editor!);
+                mainWindow.Invalidate(Invalidation.Repaint, editor!);
                 args.Handled = true;
                 return true;
             }
@@ -312,7 +312,7 @@ public sealed class SqlCompletionController
             if (key == ConsoleKey.DownArrow)
             {
                 portal.SelectNext();
-                mainWindow.Invalidate(false, editor!);
+                mainWindow.Invalidate(Invalidation.Repaint, editor!);
                 args.Handled = true;
                 return true;
             }
