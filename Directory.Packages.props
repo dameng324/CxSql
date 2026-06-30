@@ -11,6 +11,6 @@
     />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="SharpConsoleUI" Version="2.4.78" />
-    <PackageVersion Include="TUnit" Version="1.56.25" />
+    <PackageVersion Include="TUnit" Version="1.57.0" />
   </ItemGroup>
 </Project>
