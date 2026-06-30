@@ -1,4 +1,13 @@
 <Solution>
+  <Folder Name="/items/">
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="dotnet-tools.json" />
+    <File Path="global.json" />
+    <File Path="lefthook.yml" />
+    <File Path="README.md" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/cxsql/cxsql.csproj" />
   </Folder>
