@@ -10,7 +10,7 @@
       Version="11.0.0-preview.5.26302.115"
     />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
-    <PackageVersion Include="SharpConsoleUI" Version="2.5.1" />
+    <PackageVersion Include="SharpConsoleUI" Version="2.5.11" />
     <PackageVersion Include="TUnit" Version="1.57.0" />
   </ItemGroup>
 </Project>
