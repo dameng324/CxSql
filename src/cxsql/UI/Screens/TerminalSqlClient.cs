@@ -188,13 +188,14 @@ public sealed class TerminalSqlClient(
         Console.WriteLine();
         Console.WriteLine("New Connection dialog");
         Console.WriteLine("Close Dialog (Esc) is available in ConsoleEx dialog mode.");
-        Console.WriteLine("[1] SQLite | [2] PostgreSQL | [3] SQL Server");
+        Console.WriteLine("[1] SQLite | [2] PostgreSQL | [3] SQL Server | [4] MySQL");
         Console.Write("Select database type button: ");
         var databaseType = Console.ReadLine()?.Trim() switch
         {
             "1" => DatabaseType.Sqlite,
             "2" => DatabaseType.PostgreSql,
             "3" => DatabaseType.SqlServer,
+            "4" => DatabaseType.MySql,
             _ => throw new InvalidOperationException("Select a visible database type button."),
         };
 

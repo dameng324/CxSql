@@ -5,6 +5,7 @@ using CxSql.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using MySqlConnector;
 using Npgsql;
 
 namespace CxSql.Application.Services;
@@ -87,6 +88,9 @@ public sealed class QueryExecutionService(
             ),
             PostgresException postgresException => postgresException.SqlState,
             SqlException sqlException => sqlException.Number.ToString(CultureInfo.InvariantCulture),
+            MySqlException mySqlException => mySqlException.Number.ToString(
+                CultureInfo.InvariantCulture
+            ),
             _ => exception.ErrorCode.ToString(CultureInfo.InvariantCulture),
         };
     }

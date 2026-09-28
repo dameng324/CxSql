@@ -2,6 +2,7 @@ using CxSql.Models;
 using CxSql.UI.Dialogs;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
+using MySqlConnector;
 using Npgsql;
 using TUnit.Core;
 
@@ -158,6 +159,45 @@ public sealed class ConnectionInputMapperTests
             throw new InvalidOperationException(
                 $"Expected SQL Server password to be masked, got {safeValue}."
             );
+        }
+    }
+
+    [Test]
+    public void MySqlServerFieldsBuildConnectionString()
+    {
+        var connectionString = ConnectionInputMapper.ToServerConnectionString(
+            DatabaseType.MySql,
+            new ServerConnectionFields("127.0.0.1", 3307, "appdb", "appuser", "secret")
+        );
+        var builder = new MySqlConnectionStringBuilder(connectionString);
+
+        if (
+            builder.Server != "127.0.0.1"
+            || builder.Port != 3307
+            || builder.Database != "appdb"
+            || builder.UserID != "appuser"
+            || builder.Password != "secret"
+        )
+        {
+            throw new InvalidOperationException("Unexpected MySQL connection settings.");
+        }
+    }
+
+    [Test]
+    public void SafeMySqlConnectionStringMasksPassword()
+    {
+        const string connectionString = "Server=localhost;Database=app;User ID=app;Pwd=secret;";
+        var safeValue = ConnectionInputMapper.ToSafeConnectionString(
+            DatabaseType.MySql,
+            connectionString
+        );
+
+        if (
+            safeValue.Contains("secret", StringComparison.OrdinalIgnoreCase)
+            || !safeValue.Contains("******", StringComparison.Ordinal)
+        )
+        {
+            throw new InvalidOperationException("Expected MySQL password to be masked.");
         }
     }
 }

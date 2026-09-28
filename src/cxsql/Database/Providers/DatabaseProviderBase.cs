@@ -198,6 +198,11 @@ public abstract class DatabaseProviderBase : IDatabaseProvider, IPreviewSqlBuild
         return "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
     }
 
+    protected static string QuoteBacktick(string identifier)
+    {
+        return "`" + identifier.Replace("`", "``", StringComparison.Ordinal) + "`";
+    }
+
     protected static string BuildCreateTableSketch(
         DatabaseObject databaseObject,
         IReadOnlyList<DatabaseColumn> columns
