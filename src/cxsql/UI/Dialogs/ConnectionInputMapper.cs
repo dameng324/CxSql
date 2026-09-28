@@ -2,6 +2,7 @@ using System.Data.Common;
 using CxSql.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
+using MySqlConnector;
 using Npgsql;
 
 namespace CxSql.UI.Dialogs;
@@ -24,6 +25,7 @@ public static class ConnectionInputMapper
         {
             DatabaseType.PostgreSql => 5432,
             DatabaseType.SqlServer => 1433,
+            DatabaseType.MySql => 3306,
             _ => 0,
         };
     }
@@ -35,6 +37,7 @@ public static class ConnectionInputMapper
             DatabaseType.Sqlite => "SQLite",
             DatabaseType.PostgreSql => "PostgreSQL",
             DatabaseType.SqlServer => "SQL Server",
+            DatabaseType.MySql => "MySQL",
             _ => databaseType.ToString(),
         };
     }
@@ -46,6 +49,7 @@ public static class ConnectionInputMapper
             DatabaseType.Sqlite => "SQLite file path: ",
             DatabaseType.PostgreSql => "PostgreSQL connection string: ",
             DatabaseType.SqlServer => "SQL Server connection string: ",
+            DatabaseType.MySql => "MySQL connection string: ",
             _ => "Connection string: ",
         };
     }
@@ -58,6 +62,7 @@ public static class ConnectionInputMapper
                 "For SQLite, enter the database file path. cxsql builds the connection string.",
             DatabaseType.PostgreSql => "For PostgreSQL, enter the full connection string.",
             DatabaseType.SqlServer => "For SQL Server, enter the full connection string.",
+            DatabaseType.MySql => "For MySQL, enter the full connection string.",
             _ => "Enter the connection string.",
         };
     }
@@ -104,6 +109,7 @@ public static class ConnectionInputMapper
             {
                 DatabaseType.PostgreSql => MaskPostgreSqlPassword(connectionString),
                 DatabaseType.SqlServer => MaskSqlServerPassword(connectionString),
+                DatabaseType.MySql => MaskMySqlPassword(connectionString),
                 _ => MaskGenericPassword(connectionString),
             };
         }
@@ -122,6 +128,7 @@ public static class ConnectionInputMapper
         {
             DatabaseType.PostgreSql => BuildPostgreSqlConnectionString(fields),
             DatabaseType.SqlServer => BuildSqlServerConnectionString(fields),
+            DatabaseType.MySql => BuildMySqlConnectionString(fields),
             _ => throw new InvalidOperationException(
                 $"Server fields are not supported for {databaseType}."
             ),
@@ -175,6 +182,35 @@ public static class ConnectionInputMapper
         if (!string.IsNullOrWhiteSpace(fields.Database))
         {
             builder.InitialCatalog = fields.Database.Trim();
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildMySqlConnectionString(ServerConnectionFields fields)
+    {
+        var builder = new MySqlConnectionStringBuilder
+        {
+            Server = fields.Host,
+            Port = (uint)fields.Port,
+            UserID = fields.Username,
+            Password = fields.Password,
+            ConnectionTimeout = 15,
+        };
+        if (!string.IsNullOrWhiteSpace(fields.Database))
+        {
+            builder.Database = fields.Database.Trim();
+        }
+
+        return builder.ToString();
+    }
+
+    private static string MaskMySqlPassword(string connectionString)
+    {
+        var builder = new MySqlConnectionStringBuilder(connectionString);
+        if (HasSecret(builder, "Password") || HasSecret(builder, "Pwd"))
+        {
+            builder.Password = SecretMask;
         }
 
         return builder.ToString();

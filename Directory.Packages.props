@@ -5,12 +5,16 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-preview.7.26381.103" />
+    <PackageVersion Include="MySqlConnector" Version="2.6.1" />
     <PackageVersion
       Include="Microsoft.Extensions.Logging.Console"
       Version="11.0.0-preview.7.26381.103"
     />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="TUnit" Version="1.61.15" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.15.0" />
+    <PackageVersion Include="Testcontainers.MySql" Version="4.15.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
     <PackageVersion Include="SharpConsoleUI" Version="2.6.6" />
   </ItemGroup>
 </Project>

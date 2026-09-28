@@ -41,3 +41,18 @@ jobs:
 
       - name: Test
         run: dotnet test cxsql.slnx --no-build
+
+  database-integration:
+    name: Database integration (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: ./global.json
+
+      - name: Test providers with Testcontainers
+        run: dotnet test tests/cxsql.IntegrationTests/cxsql.IntegrationTests.csproj

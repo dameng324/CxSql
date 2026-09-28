@@ -54,22 +54,25 @@ public static class ResultGridSqlBuilder
         var column = QuoteIdentifier(databaseType, filter.ColumnName);
         return filter.Operator switch
         {
-            ResultGridFilterOperator.Equal => $"{column} = {BuildStringLiteral(filter.Value)}",
+            ResultGridFilterOperator.Equal =>
+                $"{column} = {BuildStringLiteral(databaseType, filter.Value)}",
+            ResultGridFilterOperator.Contains when databaseType == DatabaseType.MySql =>
+                $"LOCATE({BuildStringLiteral(databaseType, filter.Value)}, {column}) > 0",
             ResultGridFilterOperator.Contains =>
                 $"{column} LIKE {BuildLikeLiteral(filter.Value)} ESCAPE '\\'",
             ResultGridFilterOperator.GreaterThan =>
-                $"{column} > {BuildComparisonLiteral(filter.Value)}",
+                $"{column} > {BuildComparisonLiteral(databaseType, filter.Value)}",
             ResultGridFilterOperator.LessThan =>
-                $"{column} < {BuildComparisonLiteral(filter.Value)}",
+                $"{column} < {BuildComparisonLiteral(databaseType, filter.Value)}",
             ResultGridFilterOperator.GreaterThanOrEqual =>
-                $"{column} >= {BuildComparisonLiteral(filter.Value)}",
+                $"{column} >= {BuildComparisonLiteral(databaseType, filter.Value)}",
             ResultGridFilterOperator.LessThanOrEqual =>
-                $"{column} <= {BuildComparisonLiteral(filter.Value)}",
+                $"{column} <= {BuildComparisonLiteral(databaseType, filter.Value)}",
             _ => throw new ArgumentOutOfRangeException(nameof(filter), filter.Operator, null),
         };
     }
 
-    private static string BuildComparisonLiteral(string value)
+    private static string BuildComparisonLiteral(DatabaseType databaseType, string value)
     {
         return decimal.TryParse(
             value,
@@ -78,16 +81,21 @@ public static class ResultGridSqlBuilder
             out var number
         )
             ? number.ToString(CultureInfo.InvariantCulture)
-            : BuildStringLiteral(value);
+            : BuildStringLiteral(databaseType, value);
     }
 
     private static string BuildLikeLiteral(string value)
     {
-        return BuildStringLiteral($"%{EscapeLikeValue(value)}%");
+        return BuildStringLiteral(DatabaseType.Sqlite, $"%{EscapeLikeValue(value)}%");
     }
 
-    private static string BuildStringLiteral(string value)
+    private static string BuildStringLiteral(DatabaseType databaseType, string value)
     {
+        if (databaseType == DatabaseType.MySql && value.Length > 0)
+        {
+            return $"CONVERT(0x{Convert.ToHexString(Encoding.UTF8.GetBytes(value))} USING utf8mb4)";
+        }
+
         return "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     }
 
@@ -101,9 +109,16 @@ public static class ResultGridSqlBuilder
 
     private static string QuoteIdentifier(DatabaseType databaseType, string identifier)
     {
-        return databaseType == DatabaseType.SqlServer
-            ? "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]"
-            : "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+        return databaseType switch
+        {
+            DatabaseType.SqlServer => "["
+                + identifier.Replace("]", "]]", StringComparison.Ordinal)
+                + "]",
+            DatabaseType.MySql => "`"
+                + identifier.Replace("`", "``", StringComparison.Ordinal)
+                + "`",
+            _ => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"",
+        };
     }
 
     private static string NormalizeBaseSql(string baseSql)

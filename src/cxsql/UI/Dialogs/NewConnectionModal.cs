@@ -104,6 +104,13 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
                     .WithMargin(1, 0, 1, 0)
                     .Build()
             )
+            .AddTab(
+                "MySQL",
+                Controls
+                    .Markup("[grey70]Network database. Use a MySQL connection string below.[/]")
+                    .WithMargin(1, 0, 1, 0)
+                    .Build()
+            )
             .Build();
         typeTabs.ActiveFocusedBackgroundColor = new Color(24, 104, 64);
         typeTabs.ActiveUnfocusedBackgroundColor = new Color(24, 104, 64);
@@ -241,6 +248,7 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         {
             1 => DatabaseType.PostgreSql,
             2 => DatabaseType.SqlServer,
+            3 => DatabaseType.MySql,
             _ => DatabaseType.Sqlite,
         };
         selectedMode =
@@ -363,9 +371,14 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         }
 
         var port = ConnectionInputMapper.GetDefaultPort(selectedType);
-        return selectedType == DatabaseType.SqlServer
-            ? $"Server mode builds a SQL Server connection string. Default port is {port}; TrustServerCertificate=True is applied for terminal setup."
-            : $"Server mode builds a PostgreSQL connection string. Default port is {port}.";
+        return selectedType switch
+        {
+            DatabaseType.SqlServer =>
+                $"Server mode builds a SQL Server connection string. Default port is {port}; TrustServerCertificate=True is applied for terminal setup.",
+            DatabaseType.MySql =>
+                $"Server mode builds a MySQL connection string. Default port is {port}.",
+            _ => $"Server mode builds a PostgreSQL connection string. Default port is {port}.",
+        };
     }
 
     private void Submit()

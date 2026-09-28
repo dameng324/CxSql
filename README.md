@@ -7,7 +7,7 @@ CSV export, and copy workflows in a cross-platform TUI.
 
 ## Highlights
 
-- Connect to SQLite, PostgreSQL, and SQL Server.
+- Connect to SQLite, PostgreSQL, SQL Server, and MySQL.
 - Save connection profiles locally as JSON.
 - Browse database objects in a left-side explorer.
 - Double-click tables and views to preview data.
@@ -51,6 +51,13 @@ At startup, cxsql automatically deletes its own log files older than 30 days.
 dotnet tool restore
 dotnet build cxsql.slnx
 dotnet test cxsql.slnx
+```
+
+Database provider integration tests use a local Docker engine to start isolated
+MySQL, PostgreSQL, and SQL Server containers. SQLite uses a temporary file:
+
+```powershell
+dotnet test tests/cxsql.IntegrationTests/cxsql.IntegrationTests.csproj
 ```
 
 ## Run From Source

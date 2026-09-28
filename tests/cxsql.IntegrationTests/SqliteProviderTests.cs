@@ -2,7 +2,7 @@ using CxSql.Database.Providers;
 using CxSql.Models;
 using TUnit.Core;
 
-namespace CxSql.Tests;
+namespace CxSql.IntegrationTests;
 
 public sealed class SqliteProviderTests
 {

@@ -30,6 +30,25 @@ public sealed class ResultGridSqlBuilderTests
         }
     }
 
+    [Test]
+    public void MySqlFilterQuotesIdentifiersAndValues()
+    {
+        var sql = ResultGridSqlBuilder.Build(
+            DatabaseType.MySql,
+            "SELECT * FROM `app`.`people`;",
+            new ResultGridFilterRequest("na`me", ResultGridFilterOperator.Contains, "Ada'\\_%"),
+            new ResultGridSortRequest("id`value", SortDirection.Ascending)
+        );
+
+        RequireContains(sql, "LOCATE(CONVERT(0x");
+        RequireContains(sql, "`na``me`) > 0");
+        RequireContains(sql, "ORDER BY `id``value` ASC");
+        if (sql.Contains("Ada'", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("MySQL filter value must not be embedded in SQL.");
+        }
+    }
+
     private static void RequireContains(string value, string expected)
     {
         if (!value.Contains(expected, StringComparison.Ordinal))

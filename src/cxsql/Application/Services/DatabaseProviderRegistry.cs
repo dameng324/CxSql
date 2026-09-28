@@ -20,6 +20,7 @@ public sealed class DatabaseProviderRegistry
             (DatabaseType.Sqlite, new SqliteProvider()),
             (DatabaseType.PostgreSql, new PostgreSqlProvider()),
             (DatabaseType.SqlServer, new SqlServerProvider()),
+            (DatabaseType.MySql, new MySqlProvider()),
         ]);
     }
 

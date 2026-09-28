@@ -1576,6 +1576,11 @@ public sealed class SharpConsoleSqlClient(
             return "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
         }
 
+        if (activeConnection?.DatabaseType == DatabaseType.MySql)
+        {
+            return "`" + identifier.Replace("`", "``", StringComparison.Ordinal) + "`";
+        }
+
         return "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
     }
 
