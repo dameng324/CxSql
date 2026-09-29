@@ -11,7 +11,7 @@
       Version="11.0.0-rc.1.26425.128"
     />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
-    <PackageVersion Include="TUnit" Version="1.61.15" />
+    <PackageVersion Include="TUnit" Version="1.71.0" />
     <PackageVersion Include="Testcontainers.MsSql" Version="4.15.0" />
     <PackageVersion Include="Testcontainers.MySql" Version="4.15.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
