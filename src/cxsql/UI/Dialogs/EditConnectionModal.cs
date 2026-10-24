@@ -161,7 +161,7 @@ public sealed class EditConnectionModal : ModalBase<NewConnectionRequest?>
         testStatus?.SetContent(["[yellow]Testing connection...[/]"]);
         try
         {
-            var result = await testConnectionAsync(request);
+            var result = await Task.Run(() => testConnectionAsync(request));
             testStatus?.SetContent(
                 result.Succeeded
                     ? ["[green]Connection test succeeded.[/]"]

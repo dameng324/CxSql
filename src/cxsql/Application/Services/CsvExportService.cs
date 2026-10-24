@@ -17,9 +17,10 @@ public sealed class CsvExportService
             Directory.CreateDirectory(directory);
         }
 
+        var csvContent = await Task.Run(() => ToCsv(queryResult), cancellationToken);
         await File.WriteAllTextAsync(
             filePath,
-            ToCsv(queryResult),
+            csvContent,
             Encoding.UTF8,
             cancellationToken
         );

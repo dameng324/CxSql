@@ -42,6 +42,8 @@ public abstract class DatabaseProviderBase : IDatabaseProvider, IPreviewSqlBuild
 
     public abstract string BuildPreviewSql(DatabaseObject databaseObject, int rowLimit);
 
+    public abstract string BuildSchemaPreviewSql(string schemaName);
+
     public async Task<QueryResult> ExecuteSqlAsync(
         DbConnection connection,
         string sql,
@@ -191,6 +193,11 @@ public abstract class DatabaseProviderBase : IDatabaseProvider, IPreviewSqlBuild
     protected static string QuoteDouble(string identifier)
     {
         return "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+    }
+
+    protected static string QuoteLiteral(string value)
+    {
+        return "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     }
 
     protected static string QuoteBracket(string identifier)

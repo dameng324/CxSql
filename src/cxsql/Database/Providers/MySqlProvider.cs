@@ -244,6 +244,22 @@ public sealed class MySqlProvider : DatabaseProviderBase
         return $"SELECT * FROM {name} LIMIT {rowLimit};";
     }
 
+    public override string BuildSchemaPreviewSql(string schemaName)
+    {
+        return $"""
+            SELECT
+                TABLE_NAME AS `Table`,
+                COLUMN_NAME AS `Column`,
+                COLUMN_TYPE AS `Type`
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = {QuoteMySqlLiteral(schemaName)}
+            ORDER BY TABLE_NAME, ORDINAL_POSITION;
+            """;
+    }
+
+    private static string QuoteMySqlLiteral(string value) =>
+        "'" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("'", "''", StringComparison.Ordinal) + "'";
+
     private static string GetSchema(DbConnection connection, DatabaseObject databaseObject)
     {
         var schema = string.IsNullOrWhiteSpace(databaseObject.Schema)

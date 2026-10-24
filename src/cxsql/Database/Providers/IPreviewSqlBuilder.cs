@@ -5,4 +5,5 @@ namespace CxSql.Database.Providers;
 public interface IPreviewSqlBuilder
 {
     string BuildPreviewSql(DatabaseObject databaseObject, int rowLimit);
+    string BuildSchemaPreviewSql(string schemaName);
 }

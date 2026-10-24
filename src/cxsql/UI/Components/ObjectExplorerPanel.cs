@@ -137,21 +137,62 @@ public sealed class ObjectExplorerPanel
 
     private void AddObjectGroups(TreeNode connectionNode)
     {
-        foreach (var group in objects.GroupBy(item => item.ObjectType).OrderBy(item => item.Key))
+        if (objects.Count == 0)
         {
-            var groupNode = connectionNode.AddChild($"[yellow]{group.Key}[/]");
+            connectionNode.AddChild("[grey50]No database objects loaded[/]");
+            return;
+        }
+
+        var schemas = objects
+            .Where(item => item.ObjectType == DatabaseObjectType.Schema)
+            .GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var members = objects
+            .Where(item => item.ObjectType != DatabaseObjectType.Schema)
+            .ToLookup(item => item.Schema ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+
+        AddTypeGroups(connectionNode, members[string.Empty], item => item.DisplayName);
+
+        var names = schemas.Keys
+            .Concat(members.Select(group => group.Key).Where(name => name.Length > 0))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names)
+        {
+            var schemaNode = connectionNode.AddChild($"[yellow]{MarkupParser.Escape(name)}[/]");
+            schemaNode.IsExpanded = true;
+
+            schemaNode.Tag = schemas.TryGetValue(name, out var schema)
+                ? schema
+                : new DatabaseObject { Name = name, ObjectType = DatabaseObjectType.Schema };
+
+            if (!AddTypeGroups(schemaNode, members[name], item => item.Name))
+            {
+                schemaNode.AddChild("[grey50](empty)[/]");
+            }
+        }
+    }
+
+    private static bool AddTypeGroups(
+        TreeNode parent,
+        IEnumerable<DatabaseObject> items,
+        Func<DatabaseObject, string> label
+    )
+    {
+        var any = false;
+        foreach (var group in items.GroupBy(item => item.ObjectType).OrderBy(item => item.Key))
+        {
+            any = true;
+            var groupNode = parent.AddChild($"[yellow]{group.Key}[/]");
             groupNode.IsExpanded = true;
 
-            foreach (var databaseObject in group.OrderBy(item => item.DisplayName))
+            foreach (var databaseObject in group.OrderBy(label, StringComparer.OrdinalIgnoreCase))
             {
-                var child = groupNode.AddChild(MarkupParser.Escape(databaseObject.DisplayName));
+                var child = groupNode.AddChild(MarkupParser.Escape(label(databaseObject)));
                 child.Tag = databaseObject;
             }
         }
 
-        if (objects.Count == 0)
-        {
-            connectionNode.AddChild("[grey50]No database objects loaded[/]");
-        }
+        return any;
     }
 }
