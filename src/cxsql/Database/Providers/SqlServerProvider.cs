@@ -250,6 +250,25 @@ public sealed class SqlServerProvider : DatabaseProviderBase
         return $"SELECT TOP ({rowLimit}) * FROM {name};";
     }
 
+    public override string BuildSchemaPreviewSql(string schemaName)
+    {
+        var name = "N" + QuoteLiteral(schemaName);
+        return $"""
+            SELECT
+                o.name AS [Table],
+                c.name AS [Column],
+                ty.name AS [Type],
+                c.max_length AS [Max Length]
+            FROM sys.objects o
+            JOIN sys.schemas s ON s.schema_id = o.schema_id
+            JOIN sys.columns c ON c.object_id = o.object_id
+            JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+            WHERE s.name = {name} AND o.type IN ('U', 'V')
+            ORDER BY o.name, c.column_id
+            OFFSET 0 ROWS;
+            """;
+    }
+
     private static void AddParameter(DbCommand command, string name, object value)
     {
         var parameter = command.CreateParameter();

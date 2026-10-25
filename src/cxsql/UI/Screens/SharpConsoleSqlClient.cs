@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using CxSql.Application.Services;
 using CxSql.Models;
 using CxSql.UI.Components;
@@ -42,6 +44,27 @@ public sealed class SharpConsoleSqlClient(
     );
     private readonly List<string> errorMessageLines = [];
 
+    private void FireAndForget(
+        Task task,
+        [System.Runtime.CompilerServices.CallerMemberName] string? caller = null
+    )
+    {
+        _ = task.ContinueWith(
+            t =>
+            {
+                if (t.IsFaulted && t.Exception is not null)
+                {
+                    logger.LogError(
+                        t.Exception,
+                        "Unhandled exception in fire-and-forget: {Caller}",
+                        caller
+                    );
+                }
+            },
+            TaskContinuationOptions.OnlyOnFaulted
+        );
+    }
+
     private ConsoleWindowSystem windowSystem = null!;
     private Window mainWindow = null!;
     private StatusBarControl headerBar = null!;
@@ -53,6 +76,10 @@ public sealed class SharpConsoleSqlClient(
     private TableControl resultTable = null!;
     private MarkupControl messagesPanel = null!;
     private MarkupControl statusLine = null!;
+    private readonly List<BusyWork> busyWork = [];
+    private SpinnerTextAnimator? busySpinner;
+    private string busyFrame = string.Empty;
+    private string statusMessage = "Ready. Left panel manages connections. Exit: Ctrl+Q.";
     private SqlContextMenuController contextMenuController = null!;
     private SqlCompletionController completionController = null!;
 
@@ -95,7 +122,7 @@ public sealed class SharpConsoleSqlClient(
         windowSystem.AddWindow(mainWindow);
         windowSystem.SetActiveWindow(mainWindow);
 
-        _ = LoadConnectionsAsync();
+        FireAndForget(LoadConnectionsAsync());
         windowSystem.Run();
         return 0;
     }
@@ -112,13 +139,16 @@ public sealed class SharpConsoleSqlClient(
             UpdateStatus(
                 $"Selected {connection.Name}. Double-click to open, or right-click for actions."
             );
-        objectExplorer.ConnectionActivated += connection => _ = OpenConnectionAsync(connection);
+        objectExplorer.ConnectionActivated += connection =>
+            FireAndForget(OpenConnectionAsync(connection));
         objectExplorer.ConnectionsRightClicked += args =>
         {
             ShowConnectionsContext(args);
         };
-        objectExplorer.ObjectSelected += databaseObject => _ = LoadColumnsAsync(databaseObject);
-        objectExplorer.ObjectActivated += databaseObject => _ = PreviewObjectAsync(databaseObject);
+        objectExplorer.ObjectSelected += databaseObject =>
+            FireAndForget(LoadColumnsAsync(databaseObject));
+        objectExplorer.ObjectActivated += databaseObject =>
+            FireAndForget(PreviewObjectAsync(databaseObject));
         objectExplorer.ObjectRightClicked += (databaseObject, args) =>
         {
             ShowObjectContext(databaseObject, args);
@@ -302,9 +332,9 @@ public sealed class SharpConsoleSqlClient(
             .WithBackgroundColor(Color.Transparent)
             .WithBelowLineColor(Color.Grey27);
 
-        AddToolbarButton(builder, "New", () => _ = NewConnectionAsync());
-        AddToolbarButton(builder, "Open", () => _ = SelectConnectionAsync());
-        AddToolbarButton(builder, "Refresh", () => _ = RefreshObjectsAsync());
+        AddToolbarButton(builder, "New", () => FireAndForget(NewConnectionAsync()));
+        AddToolbarButton(builder, "Open", () => FireAndForget(SelectConnectionAsync()));
+        AddToolbarButton(builder, "Refresh", () => FireAndForget(RefreshObjectsAsync()));
 
         return builder.Build();
     }
@@ -319,10 +349,18 @@ public sealed class SharpConsoleSqlClient(
             .WithBackgroundColor(Color.Transparent)
             .WithBelowLineColor(Color.Grey27);
 
-        AddToolbarButton(builder, "Execute [grey50]F5[/]", () => _ = ExecuteCurrentSqlAsync());
+        AddToolbarButton(
+            builder,
+            "Execute [grey50]F5[/]",
+            () => FireAndForget(ExecuteCurrentSqlAsync())
+        );
         AddToolbarButton(builder, "Stop", StopExecution);
-        AddToolbarButton(builder, "Save SQL [grey50]Ctrl+S[/]", () => _ = SaveSqlAsync());
-        AddToolbarButton(builder, "History", () => _ = ShowHistoryAsync());
+        AddToolbarButton(
+            builder,
+            "Save SQL [grey50]Ctrl+S[/]",
+            () => FireAndForget(SaveSqlAsync())
+        );
+        AddToolbarButton(builder, "History", () => FireAndForget(ShowHistoryAsync()));
 
         return builder.Build();
     }
@@ -337,7 +375,7 @@ public sealed class SharpConsoleSqlClient(
             .WithBackgroundColor(Color.Transparent)
             .WithBelowLineColor(Color.Grey27);
 
-        AddToolbarButton(builder, "Export CSV", () => _ = ExportCsvAsync());
+        AddToolbarButton(builder, "Export CSV", () => FireAndForget(ExportCsvAsync()));
         AddToolbarButton(builder, "Copy All", CopyAllResults);
         AddToolbarButton(builder, "Clear Filter", ClearResultFilter);
 
@@ -476,7 +514,10 @@ public sealed class SharpConsoleSqlClient(
     private async Task OpenConnectionAsync(DatabaseConnection connection)
     {
         UpdateStatus($"Opening {connection.Name}...");
-        var test = await connectionManager.TestAsync(connection, CancellationToken.None);
+        var test = await RunInBackgroundAsync(
+            $"Connecting to {connection.Name}...",
+            (ct, _) => connectionManager.TestAsync(connection, ct)
+        );
         if (!test.Succeeded)
         {
             AppendMessage(
@@ -510,13 +551,17 @@ public sealed class SharpConsoleSqlClient(
 
         try
         {
-            var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
-            await using var connection = provider.CreateConnection(
-                activeConnection.ConnectionString
-            );
-            currentObjects = await provider.GetDatabaseObjectsAsync(
-                connection,
-                CancellationToken.None
+            var source = activeConnection;
+            currentObjects = await RunInBackgroundAsync(
+                $"Loading objects from {source.Name}...",
+                async (ct, progress) =>
+                {
+                    var provider = providerRegistry.GetProvider(source.DatabaseType);
+                    progress.Report($"Connecting to {source.Name}...");
+                    await using var conn = provider.CreateConnection(source.ConnectionString);
+                    progress.Report("Fetching schema...");
+                    return await provider.GetDatabaseObjectsAsync(conn, ct);
+                }
             );
             objectExplorer.SetConnections(connections, activeConnection, currentObjects);
             UpdateStatus($"Loaded {currentObjects.Count} object(s) from {activeConnection.Name}.");
@@ -531,7 +576,7 @@ public sealed class SharpConsoleSqlClient(
         DatabaseObject databaseObject
     )
     {
-        if (activeConnection is null)
+        if (activeConnection is null || databaseObject.ObjectType == DatabaseObjectType.Schema)
         {
             return [];
         }
@@ -544,14 +589,17 @@ public sealed class SharpConsoleSqlClient(
 
         try
         {
-            var provider = providerRegistry.GetProvider(activeConnection.DatabaseType);
-            await using var connection = provider.CreateConnection(
-                activeConnection.ConnectionString
-            );
-            var columns = await provider.GetColumnsAsync(
-                connection,
-                databaseObject,
-                CancellationToken.None
+            var source = activeConnection;
+            var columns = await RunInBackgroundAsync(
+                $"Fetching column information for {databaseObject.DisplayName}...",
+                async (ct, progress) =>
+                {
+                    var provider = providerRegistry.GetProvider(source.DatabaseType);
+                    progress.Report($"Connecting to {source.Name}...");
+                    await using var conn = provider.CreateConnection(source.ConnectionString);
+                    progress.Report("Fetching columns...");
+                    return await provider.GetColumnsAsync(conn, databaseObject, ct);
+                }
             );
             knownColumnsByObject[key] = columns;
             return columns;
@@ -576,11 +624,19 @@ public sealed class SharpConsoleSqlClient(
 
         try
         {
-            await LoadColumnsAsync(databaseObject);
-            var previewSql = providerRegistry
-                .GetPreviewSqlBuilder(activeConnection.DatabaseType)
-                .BuildPreviewSql(databaseObject, 100);
-            pendingResultBaseSql = BuildSelectSql(databaseObject);
+            var builder = providerRegistry.GetPreviewSqlBuilder(activeConnection.DatabaseType);
+            string previewSql;
+            if (databaseObject.ObjectType == DatabaseObjectType.Schema)
+            {
+                previewSql = builder.BuildSchemaPreviewSql(databaseObject.Name);
+            }
+            else
+            {
+                await LoadColumnsAsync(databaseObject);
+                previewSql = builder.BuildPreviewSql(databaseObject, 100);
+                pendingResultBaseSql = BuildSelectSql(databaseObject);
+            }
+
             try
             {
                 ActiveEditor?.SetContent(previewSql);
@@ -644,9 +700,11 @@ public sealed class SharpConsoleSqlClient(
 
         try
         {
-            lastResult = await queryExecutionService.ExecuteAsync(
-                activeConnection,
-                editor.Content,
+            var queryText = editor.Content;
+            var conn = activeConnection!;
+            lastResult = await RunInBackgroundAsync(
+                "Running query...",
+                (ct, _) => queryExecutionService.ExecuteAsync(conn, queryText, ct),
                 executionCts.Token
             );
             var displayResult =
@@ -858,61 +916,102 @@ public sealed class SharpConsoleSqlClient(
         SharpConsoleUI.Events.MouseEventArgs args
     )
     {
-        _ = LoadColumnsAsync(databaseObject);
+        FireAndForget(LoadColumnsAsync(databaseObject));
         var owner = objectExplorer.Control;
-        contextMenuController.Show(
-            [
+        var isSchema = databaseObject.ObjectType == DatabaseObjectType.Schema;
+        var isTableOrView =
+            databaseObject.ObjectType == DatabaseObjectType.Table
+            || databaseObject.ObjectType == DatabaseObjectType.View;
+
+        var items = new List<SqlContextMenuItem>();
+        if (isSchema)
+        {
+            items.Add(
+                new SqlContextMenuItem(
+                    "Preview Schema",
+                    null,
+                    () => PreviewObjectAsync(databaseObject)
+                )
+            );
+        }
+        else
+        {
+            items.Add(
                 new SqlContextMenuItem(
                     "Open Details",
                     null,
                     () => OpenObjectDetailsAsync(databaseObject)
-                ),
+                )
+            );
+            items.Add(
                 new SqlContextMenuItem(
                     "Preview Data",
                     null,
                     () => PreviewObjectAsync(databaseObject)
-                ),
-                new SqlContextMenuItem(
-                    "Export Table CSV",
-                    null,
-                    () => ExportObjectCsvAsync(databaseObject)
-                ),
-                SqlContextMenuItem.Separator(),
+                )
+            );
+            if (isTableOrView)
+            {
+                items.Add(
+                    new SqlContextMenuItem(
+                        "Export Table CSV",
+                        null,
+                        () => ExportObjectCsvAsync(databaseObject)
+                    )
+                );
+            }
+            items.Add(SqlContextMenuItem.Separator());
+            items.Add(
                 SqlContextMenuItem.Create(
                     "New Query Here",
                     () =>
                         SetEditorContent($"SELECT *\nFROM {GetObjectReference(databaseObject)};\n")
-                ),
+                )
+            );
+            items.Add(
                 SqlContextMenuItem.Create(
                     "Generate SELECT",
                     () => SetEditorContent(BuildSelectSql(databaseObject))
-                ),
+                )
+            );
+            items.Add(
                 SqlContextMenuItem.Create(
                     "Generate INSERT",
                     () => SetEditorContent(BuildInsertSql(databaseObject))
-                ),
+                )
+            );
+            items.Add(
                 SqlContextMenuItem.Create(
                     "Generate UPDATE",
                     () => SetEditorContent(BuildUpdateSql(databaseObject))
-                ),
+                )
+            );
+            items.Add(
                 SqlContextMenuItem.Create(
                     "Generate DELETE",
                     () => SetEditorContent(BuildDeleteSql(databaseObject))
-                ),
-                SqlContextMenuItem.Separator(),
-                new SqlContextMenuItem(
-                    "Show Columns",
-                    null,
-                    () => ShowColumnsAsync(databaseObject)
-                ),
-                new SqlContextMenuItem("Copy DDL", null, () => CopyObjectDdlAsync(databaseObject)),
-                SqlContextMenuItem.Create(
-                    "Copy Name",
-                    () => CopyToClipboard(databaseObject.DisplayName)
-                ),
-                SqlContextMenuItem.Separator(),
-                new SqlContextMenuItem("Refresh Objects", null, RefreshObjectsAsync),
-            ],
+                )
+            );
+            items.Add(SqlContextMenuItem.Separator());
+            items.Add(
+                new SqlContextMenuItem("Show Columns", null, () => ShowColumnsAsync(databaseObject))
+            );
+            items.Add(
+                new SqlContextMenuItem("Copy DDL", null, () => CopyObjectDdlAsync(databaseObject))
+            );
+        }
+
+        items.Add(
+            SqlContextMenuItem.Create(
+                "Copy Name",
+                () => CopyToClipboard(databaseObject.DisplayName)
+            )
+        );
+        items.Add(SqlContextMenuItem.Separator());
+        items.Add(new SqlContextMenuItem("Refresh Objects", null, RefreshObjectsAsync));
+
+        contextMenuController.Show(
+            items,
             owner.ActualX + args.Position.X,
             owner.ActualY + args.Position.Y,
             owner
@@ -1891,7 +1990,7 @@ public sealed class SharpConsoleSqlClient(
     {
         if (args.KeyInfo.Key == ConsoleKey.F5 && args.KeyInfo.Modifiers == 0)
         {
-            _ = ExecuteCurrentSqlAsync();
+            FireAndForget(ExecuteCurrentSqlAsync());
             args.Handled = true;
             return;
         }
@@ -1901,7 +2000,7 @@ public sealed class SharpConsoleSqlClient(
             && args.KeyInfo.Modifiers.HasFlag(ConsoleModifiers.Control)
         )
         {
-            _ = SaveSqlAsync();
+            FireAndForget(SaveSqlAsync());
             args.Handled = true;
             return;
         }
@@ -1979,7 +2078,37 @@ public sealed class SharpConsoleSqlClient(
 
     private void UpdateStatus(string message)
     {
-        statusLine?.SetContent([$"[grey70]{MarkupParser.Escape(TruncateStatus(message))}[/]"]);
+        statusMessage = message;
+        RenderStatus();
+    }
+
+    private void RenderStatus()
+    {
+        if (busyWork.Count == 0)
+        {
+            statusLine?.SetContent([
+                $"[grey70]{MarkupParser.Escape(TruncateStatus(statusMessage))}[/]",
+            ]);
+            return;
+        }
+
+        var newest = busyWork[^1];
+        var elapsed = newest.Clock.Elapsed.TotalSeconds;
+        var text =
+            elapsed >= 1
+                ? string.Create(CultureInfo.InvariantCulture, $"{newest.Text} {elapsed:0.0}s")
+                : newest.Text;
+        var more = busyWork.Count > 1 ? $"  [grey50]+{busyWork.Count - 1} more[/]" : string.Empty;
+        statusLine?.SetContent([
+            $"[cyan]{busyFrame}[/] [grey70]{MarkupParser.Escape(TruncateStatus(text))}[/]{more}",
+        ]);
+    }
+
+    private sealed class BusyWork(string text)
+    {
+        public string Text { get; set; } = text;
+
+        public Stopwatch Clock { get; } = Stopwatch.StartNew();
     }
 
     private static string TruncateStatus(string message)
@@ -2001,6 +2130,51 @@ public sealed class SharpConsoleSqlClient(
         for (var index = 0; index < text.Length; index += width)
         {
             yield return text.Substring(index, Math.Min(width, text.Length - index));
+        }
+    }
+
+    private async Task<T> RunInBackgroundAsync<T>(
+        string statusText,
+        Func<CancellationToken, IProgress<string>, Task<T>> work,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var job = new BusyWork(statusText);
+        busyWork.Add(job);
+        if (busySpinner is null)
+        {
+            busySpinner = new SpinnerTextAnimator(
+                windowSystem,
+                SpinnerStyle.Braille,
+                frame =>
+                {
+                    busyFrame = frame;
+                    RenderStatus();
+                }
+            );
+            busySpinner.Start();
+        }
+        RenderStatus();
+
+        try
+        {
+            var progress = new Progress<string>(message =>
+            {
+                job.Text = message;
+                RenderStatus();
+            });
+            return await Task.Run(() => work(cancellationToken, progress), cancellationToken);
+        }
+        finally
+        {
+            busyWork.Remove(job);
+            if (busyWork.Count == 0)
+            {
+                busySpinner?.Dispose();
+                busySpinner = null;
+                busyFrame = string.Empty;
+            }
+            RenderStatus();
         }
     }
 
