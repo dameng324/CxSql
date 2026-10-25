@@ -9,7 +9,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cxsql</ToolCommandName>
     <PackageId>cxsql</PackageId>
-    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionPrefix>0.2.1</VersionPrefix>
     <Authors>CxSql contributors</Authors>
     <Description>Mouse-first cross-platform terminal SQL client for SQLite, PostgreSQL, SQL Server, and MySQL.</Description>
     <PackageTags>sql;database;tui;sqlite;postgresql;sqlserver;mysql</PackageTags>
