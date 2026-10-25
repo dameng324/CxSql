@@ -199,6 +199,19 @@ public sealed class SqliteProvider : DatabaseProviderBase
         return $"SELECT * FROM {QuoteDouble(databaseObject.Name)} LIMIT {rowLimit};";
     }
 
+    public override string BuildSchemaPreviewSql(string schemaName)
+    {
+        return """
+            SELECT
+                name AS "Table",
+                type AS "Type"
+            FROM sqlite_master
+            WHERE type IN ('table', 'view')
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name;
+            """;
+    }
+
     private static async Task<string?> ReadScalarStringAsync(
         DbConnection connection,
         string sql,

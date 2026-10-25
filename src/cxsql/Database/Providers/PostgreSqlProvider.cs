@@ -246,6 +246,20 @@ public sealed class PostgreSqlProvider : DatabaseProviderBase
         return $"SELECT * FROM {name} LIMIT {rowLimit};";
     }
 
+    public override string BuildSchemaPreviewSql(string schemaName)
+    {
+        return $"""
+            SELECT
+                c.table_name AS "Table",
+                c.column_name AS "Column",
+                c.data_type AS "Type",
+                c.character_maximum_length AS "Max Length"
+            FROM information_schema.columns c
+            WHERE c.table_schema = {QuoteLiteral(schemaName)}
+            ORDER BY c.table_name, c.ordinal_position;
+            """;
+    }
+
     private static void AddParameter(DbCommand command, string name, object value)
     {
         var parameter = command.CreateParameter();

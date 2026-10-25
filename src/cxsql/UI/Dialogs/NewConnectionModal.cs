@@ -402,7 +402,7 @@ public sealed class NewConnectionModal : ModalBase<NewConnectionRequest?>
         testStatus?.SetContent(["[yellow]Testing connection...[/]"]);
         try
         {
-            var result = await testConnectionAsync(request);
+            var result = await Task.Run(() => testConnectionAsync(request));
             if (result.Succeeded)
             {
                 testStatus?.SetContent(["[green]Connection test succeeded.[/]"]);
