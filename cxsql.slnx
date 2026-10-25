@@ -13,5 +13,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/cxsql.Tests/cxsql.Tests.csproj" />
+    <Project Path="tests/cxsql.IntegrationTests/cxsql.IntegrationTests.csproj" />
   </Folder>
 </Solution>

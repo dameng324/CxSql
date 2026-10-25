@@ -40,7 +40,7 @@ jobs:
         run: dotnet build cxsql.slnx --no-restore
 
       - name: Test
-        run: dotnet test cxsql.slnx --no-build
+        run: dotnet test --project tests/cxsql.Tests/cxsql.Tests.csproj --no-build
 
   database-integration:
     name: Database integration (ubuntu-latest)
