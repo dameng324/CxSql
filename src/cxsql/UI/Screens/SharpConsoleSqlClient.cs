@@ -44,7 +44,10 @@ public sealed class SharpConsoleSqlClient(
     );
     private readonly List<string> errorMessageLines = [];
 
-    private void FireAndForget(Task task, [System.Runtime.CompilerServices.CallerMemberName] string? caller = null)
+    private void FireAndForget(
+        Task task,
+        [System.Runtime.CompilerServices.CallerMemberName] string? caller = null
+    )
     {
         _ = task.ContinueWith(
             t =>
@@ -136,13 +139,16 @@ public sealed class SharpConsoleSqlClient(
             UpdateStatus(
                 $"Selected {connection.Name}. Double-click to open, or right-click for actions."
             );
-        objectExplorer.ConnectionActivated += connection => FireAndForget(OpenConnectionAsync(connection));
+        objectExplorer.ConnectionActivated += connection =>
+            FireAndForget(OpenConnectionAsync(connection));
         objectExplorer.ConnectionsRightClicked += args =>
         {
             ShowConnectionsContext(args);
         };
-        objectExplorer.ObjectSelected += databaseObject => FireAndForget(LoadColumnsAsync(databaseObject));
-        objectExplorer.ObjectActivated += databaseObject => FireAndForget(PreviewObjectAsync(databaseObject));
+        objectExplorer.ObjectSelected += databaseObject =>
+            FireAndForget(LoadColumnsAsync(databaseObject));
+        objectExplorer.ObjectActivated += databaseObject =>
+            FireAndForget(PreviewObjectAsync(databaseObject));
         objectExplorer.ObjectRightClicked += (databaseObject, args) =>
         {
             ShowObjectContext(databaseObject, args);
@@ -343,9 +349,17 @@ public sealed class SharpConsoleSqlClient(
             .WithBackgroundColor(Color.Transparent)
             .WithBelowLineColor(Color.Grey27);
 
-        AddToolbarButton(builder, "Execute [grey50]F5[/]", () => FireAndForget(ExecuteCurrentSqlAsync()));
+        AddToolbarButton(
+            builder,
+            "Execute [grey50]F5[/]",
+            () => FireAndForget(ExecuteCurrentSqlAsync())
+        );
         AddToolbarButton(builder, "Stop", StopExecution);
-        AddToolbarButton(builder, "Save SQL [grey50]Ctrl+S[/]", () => FireAndForget(SaveSqlAsync()));
+        AddToolbarButton(
+            builder,
+            "Save SQL [grey50]Ctrl+S[/]",
+            () => FireAndForget(SaveSqlAsync())
+        );
         AddToolbarButton(builder, "History", () => FireAndForget(ShowHistoryAsync()));
 
         return builder.Build();
@@ -913,7 +927,11 @@ public sealed class SharpConsoleSqlClient(
         if (isSchema)
         {
             items.Add(
-                new SqlContextMenuItem("Preview Schema", null, () => PreviewObjectAsync(databaseObject))
+                new SqlContextMenuItem(
+                    "Preview Schema",
+                    null,
+                    () => PreviewObjectAsync(databaseObject)
+                )
             );
         }
         else
@@ -976,11 +994,7 @@ public sealed class SharpConsoleSqlClient(
             );
             items.Add(SqlContextMenuItem.Separator());
             items.Add(
-                new SqlContextMenuItem(
-                    "Show Columns",
-                    null,
-                    () => ShowColumnsAsync(databaseObject)
-                )
+                new SqlContextMenuItem("Show Columns", null, () => ShowColumnsAsync(databaseObject))
             );
             items.Add(
                 new SqlContextMenuItem("Copy DDL", null, () => CopyObjectDdlAsync(databaseObject))
@@ -2072,19 +2086,22 @@ public sealed class SharpConsoleSqlClient(
     {
         if (busyWork.Count == 0)
         {
-            statusLine?.SetContent([$"[grey70]{MarkupParser.Escape(TruncateStatus(statusMessage))}[/]"]);
+            statusLine?.SetContent([
+                $"[grey70]{MarkupParser.Escape(TruncateStatus(statusMessage))}[/]",
+            ]);
             return;
         }
 
         var newest = busyWork[^1];
         var elapsed = newest.Clock.Elapsed.TotalSeconds;
-        var text = elapsed >= 1
-            ? string.Create(CultureInfo.InvariantCulture, $"{newest.Text} {elapsed:0.0}s")
-            : newest.Text;
+        var text =
+            elapsed >= 1
+                ? string.Create(CultureInfo.InvariantCulture, $"{newest.Text} {elapsed:0.0}s")
+                : newest.Text;
         var more = busyWork.Count > 1 ? $"  [grey50]+{busyWork.Count - 1} more[/]" : string.Empty;
-        statusLine?.SetContent(
-            [$"[cyan]{busyFrame}[/] [grey70]{MarkupParser.Escape(TruncateStatus(text))}[/]{more}"]
-        );
+        statusLine?.SetContent([
+            $"[cyan]{busyFrame}[/] [grey70]{MarkupParser.Escape(TruncateStatus(text))}[/]{more}",
+        ]);
     }
 
     private sealed class BusyWork(string text)

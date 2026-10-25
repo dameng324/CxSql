@@ -21,7 +21,9 @@ public sealed class SchemaPreviewSqlTests
         Expect(sql, "WHERE c.table_schema = 'o''ne'", "PostgreSQL");
         if (sql.Contains("UNION", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"PostgreSQL schema preview repeats its rows: {sql}");
+            throw new InvalidOperationException(
+                $"PostgreSQL schema preview repeats its rows: {sql}"
+            );
         }
     }
 

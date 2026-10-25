@@ -258,7 +258,11 @@ public sealed class MySqlProvider : DatabaseProviderBase
     }
 
     private static string QuoteMySqlLiteral(string value) =>
-        "'" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("'", "''", StringComparison.Ordinal) + "'";
+        "'"
+        + value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("'", "''", StringComparison.Ordinal)
+        + "'";
 
     private static string GetSchema(DbConnection connection, DatabaseObject databaseObject)
     {

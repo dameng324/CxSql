@@ -146,15 +146,19 @@ public sealed class ObjectExplorerPanel
         var schemas = objects
             .Where(item => item.ObjectType == DatabaseObjectType.Schema)
             .GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(
+                group => group.Key,
+                group => group.First(),
+                StringComparer.OrdinalIgnoreCase
+            );
         var members = objects
             .Where(item => item.ObjectType != DatabaseObjectType.Schema)
             .ToLookup(item => item.Schema ?? string.Empty, StringComparer.OrdinalIgnoreCase);
 
         AddTypeGroups(connectionNode, members[string.Empty], item => item.DisplayName);
 
-        var names = schemas.Keys
-            .Concat(members.Select(group => group.Key).Where(name => name.Length > 0))
+        var names = schemas
+            .Keys.Concat(members.Select(group => group.Key).Where(name => name.Length > 0))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase);
         foreach (var name in names)
