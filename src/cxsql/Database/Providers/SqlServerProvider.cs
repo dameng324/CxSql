@@ -264,7 +264,8 @@ public sealed class SqlServerProvider : DatabaseProviderBase
             JOIN sys.columns c ON c.object_id = o.object_id
             JOIN sys.types ty ON ty.user_type_id = c.user_type_id
             WHERE s.name = {name} AND o.type IN ('U', 'V')
-            ORDER BY o.name, c.column_id;
+            ORDER BY o.name, c.column_id
+            OFFSET 0 ROWS;
             """;
     }
 
